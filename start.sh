@@ -135,9 +135,13 @@ fi
 # aidevops's framework files land in the persistent volume.
 # ============================================
 echo "==> Deploying aidevops agents"
-export HOME=/home/cloudron
+# ScalePass change: HOME=/app/data (was /home/cloudron upstream). /home/cloudron is
+# in the read-only image layer; aidevops's first-run mkdir of $HOME/Git fails there.
+# /app/data is the writable persistent volume. Same fix pattern as patch 002
+# (HOME normalize in pulse-wrapper.sh) — apply at this scope too.
+export HOME=/app/data
 export AIDEVOPS_NON_INTERACTIVE=true
-gosu cloudron:cloudron aidevops update || echo "==> aidevops update exited non-zero (continuing — cron + Phase 9 will retry framework health)"
+gosu cloudron:cloudron env HOME=/app/data aidevops update || echo "==> aidevops update exited non-zero (continuing — cron + Phase 9 will retry framework health)"
 
 # ============================================
 # PHASE 7b: [SCALEPASS] Apply patches against the freshly-installed framework
