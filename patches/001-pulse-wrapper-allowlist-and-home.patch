@@ -1,0 +1,27 @@
+--- a/.agents/scripts/pulse-wrapper.sh
++++ b/.agents/scripts/pulse-wrapper.sh
+@@ -70,6 +70,24 @@
+ fi
+ 
+ set -euo pipefail
++
++# [ScalePass patch 001 — allowlist defang]
++# Container default AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST=opencode forces opencode-only
++# model selection regardless of routing table. Per framework docs (model-routing.md),
++# OMIT the allowlist to let routing table drive selection. Defang only the exact
++# "opencode" value so intentional multi-provider settings are preserved.
++if [[ "${AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST:-}" == "opencode" ]]; then
++	unset AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST
++fi
++
++# [ScalePass patch 002 — HOME normalization]
++# start.sh spawns pulse-wrapper via `gosu cloudron:cloudron` which switches uid but
++# NOT HOME (unlike `su -`). Inherited HOME=/root makes ${HOME}/.aidevops/oauth-pool.json
++# resolve to a non-existent path, causing Pulse to report provider_accounts_total=0
++# and refuse to dispatch. Normalize when /app/data exists.
++if [[ -d /app/data && "${HOME:-}" != "/app/data" ]]; then
++	export HOME=/app/data
++fi
+ 
+ _pulse_wrapper_deployed_scripts_dir() {
+ 	local agents_dir="${AIDEVOPS_AGENTS_DIR:-}"

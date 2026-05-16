@@ -1,10 +1,23 @@
+# ============================================
+# ScalePass aidevops worker — Dockerfile
+# Fork of marcusquinn/aidevops-cloudron-app v0.1.0
+# Modifications:
+#   - Install `patch` utility (required by /app/code/patches/apply.sh)
+#   - Pin `aidevops` npm version to a known-tested release (3.15.38 for v1)
+#   - COPY our patches/ directory into the image at /app/code/patches/
+# All other steps inherited verbatim from upstream.
+# ============================================
+
 FROM cloudron/base:5.0.0
 
 # ============================================
 # System dependencies
 # ============================================
+# `patch` added (ScalePass) — required by /app/code/patches/apply.sh at runtime.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
+    patch \
+    cron \
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================
@@ -29,18 +42,19 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================
-# OpenCode CLI (from GitHub releases) + aidevops CLI (from npm)
+# OpenCode CLI (from GitHub releases) + aidevops CLI (PINNED VERSION)
 # ============================================
+# ScalePass change: pinned `aidevops@3.15.38` (was unversioned upstream).
+# The pinned version matches kidzcity's currently-running production framework.
+# See UPSTREAM.md for the upgrade ritual.
 RUN curl -fsSL "https://github.com/anomalyco/opencode/releases/latest/download/opencode-linux-x64.tar.gz" \
     | tar -xz -C /usr/local/bin \
     && chmod +x /usr/local/bin/opencode \
     && opencode --version \
-    && npm install -g aidevops
+    && npm install -g aidevops@3.15.38
 
 # ============================================
 # Writable home directories (Cloudron read-only /app/code workaround)
-# /home/cloudron is in the read-only layer, so symlink writable paths
-# to /app/data (persistent) and /run (ephemeral) at build time.
 # ============================================
 RUN mkdir -p /app/data/.ssh /app/data/.config \
     && rm -rf /home/cloudron/.ssh /home/cloudron/.config /home/cloudron/.gitconfig \
@@ -49,14 +63,19 @@ RUN mkdir -p /app/data/.ssh /app/data/.config \
     && ln -sfn /app/data/.gitconfig /home/cloudron/.gitconfig
 
 # ============================================
-# Application code
+# Application code + ScalePass patches
 # ============================================
 WORKDIR /app/code
 
 COPY start.sh /app/code/start.sh
 COPY server.js /app/code/server.js
+# ScalePass: COPY our patches into the image. Applied by start.sh Phase 7b
+# at container start, and re-applied by the cron entry installed in Phase 7c
+# every 5 minutes (handles in-container `aidevops update` events).
+COPY patches /app/code/patches
 
-RUN chmod +x /app/code/start.sh
+RUN chmod +x /app/code/start.sh \
+    && chmod +x /app/code/patches/apply.sh
 
 EXPOSE 3000
 

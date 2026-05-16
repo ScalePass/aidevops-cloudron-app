@@ -1,21 +1,25 @@
 {
-  "id": "sh.aidevops.worker",
-  "title": "AI DevOps Worker",
-  "author": "Marcus Quinn <marcus@marcusquinn.com>",
-  "description": "Always-on remote worker node for AI DevOps. Runs headless OpenCode sessions, accepts task dispatches via HTTP API, and integrates with the aidevops supervisor pulse for autonomous code generation, PR creation, and multi-node orchestration.",
-  "tagline": "Remote AI worker node for autonomous code generation",
-  "version": "0.1.0",
+  "id": "io.scalepass.aidevops.worker",
+  "title": "ScalePass AI DevOps Worker",
+  "author": "Leon Bryan <leon@scalepass.io> (forked from Marcus Quinn <marcus@marcusquinn.com>)",
+  "description": "ScalePass-managed AI DevOps worker node. Pulse-loop dispatch off GitHub issues into Anthropic Opus 4.7+, billed to per-client OAuth pool. Forked from marcusquinn/aidevops-cloudron-app with patches for Cloudron-specific HOME and provider-allowlist handling, plus per-client routing table. See https://github.com/ScalePass/aidevops-cloudron-app.",
+  "tagline": "Per-client autonomous code-PR worker",
+  "version": "1.0.0",
   "healthCheckPath": "/health",
   "httpPort": 3000,
   "manifestVersion": 2,
-  "website": "https://aidevops.sh",
-  "contactEmail": "marcus@marcusquinn.com",
+  "website": "https://scalepass.io",
+  "contactEmail": "leon@scalepass.io",
   "icon": "file://logo.png",
-  "documentationUrl": "https://github.com/marcusquinn/aidevops-cloudron-app",
+  "documentationUrl": "https://github.com/ScalePass/aidevops-cloudron-app",
   "minBoxVersion": "7.4.0",
   "memoryLimit": 2147483648,
   "addons": {
     "localstorage": {}
   },
-  "tcpPorts": {}
+  "tcpPorts": {},
+  "env": {
+    "AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST": "anthropic,opencode",
+    "AIDEVOPS_NON_INTERACTIVE": "true"
+  }
 }

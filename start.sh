@@ -1,7 +1,20 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn (upstream) + ScalePass (modifications)
+#
+# ScalePass fork of marcusquinn/aidevops-cloudron-app start.sh v0.1.0.
+#
+# Modifications vs upstream:
+#   - Phase 3: `worker.json` default sets `"pulse": {"enabled": true}` (was false).
+#   - Phase 7b: NEW — apply ScalePass patches from /app/code/patches/ to /app/data/.aidevops/.
+#   - Phase 7c: NEW — install cron entry to re-apply patches every 5 min
+#                     (handles in-container `aidevops update` events).
+#   - cron daemon launched in Phase 9 (background) before server.js.
+# All other phases inherited verbatim from upstream.
+
 set -eu
 
-echo "==> Starting AI DevOps Worker"
+echo "==> Starting ScalePass AI DevOps Worker"
 
 # ============================================
 # PHASE 1: First-Run Detection
@@ -23,34 +36,25 @@ mkdir -p /app/data/.ssh
 mkdir -p /app/data/.config
 mkdir -p /app/data/aidevops/agents
 mkdir -p /run/app
-# Ensure /app/data is owned by cloudron early — symlinks from /home/cloudron
-# point here, and git/ssh need write access before PHASE 5+
-# Guard: only touch .gitconfig if it's not a symlink (prevents symlink attacks)
 [[ ! -L /app/data/.gitconfig ]] && touch /app/data/.gitconfig
-# Use -h (--no-dereference) to avoid following symlinks during recursive chown.
-# Without -h, a malicious symlink in /app/data could redirect ownership changes
-# to sensitive root-owned files (e.g., /etc/shadow), enabling privilege escalation.
 chown -hR cloudron:cloudron /app/data
 chown -hR cloudron:cloudron /run/app
 
 # ============================================
 # PHASE 3: First-Run Initialization
+# ScalePass change: worker.json default has pulse.enabled=true (was false upstream).
 # ============================================
 if [[ "$FIRST_RUN" == "true" ]]; then
 	echo "==> First-run initialization"
 
-	# Generate SSH key for git operations if none exists
 	if [[ ! -f /app/data/.ssh/id_ed25519 ]]; then
 		echo "==> Generating SSH key for git operations"
 		ssh-keygen -t ed25519 -f /app/data/.ssh/id_ed25519 -N "" -C "aidevops-worker@cloudron"
 		echo "==> SSH public key (add to GitHub deploy keys):"
 		cat /app/data/.ssh/id_ed25519.pub
-		# Fix ownership — ssh-keygen runs as root, so generated files are root-owned.
-		# Without this, SSH operations by the cloudron user fail with permission denied.
 		chown -hR cloudron:cloudron /app/data/.ssh
 	fi
 
-	# Initialize default config with auto-generated auth token
 	if [[ ! -f /app/data/config/worker.json ]]; then
 		AUTH_TOKEN=$(openssl rand -hex 32)
 		cat >/app/data/config/worker.json <<EOF
@@ -67,7 +71,7 @@ if [[ "$FIRST_RUN" == "true" ]]; then
     "auto_accept": false
   },
   "pulse": {
-    "enabled": false,
+    "enabled": true,
     "interval_seconds": 120,
     "repos_json_path": "/app/data/config/repos.json"
   }
@@ -79,7 +83,6 @@ EOF
 		echo "============================================"
 	fi
 
-	# Initialize repos.json
 	if [[ ! -f /app/data/config/repos.json ]]; then
 		cat >/app/data/config/repos.json <<'EOF'
 {
@@ -93,27 +96,13 @@ fi
 # ============================================
 # PHASE 4: SSH Configuration
 # ============================================
-# /home/cloudron/.ssh is a symlink to /app/data/.ssh (set up in Dockerfile)
-# Write directly to /app/data/.ssh — no copy needed
-# Set SSH key permissions if the files exist as regular files (not symlinks).
-# SECURITY: [[ -f ]] follows symlinks in bash — it returns true for a symlink
-# whose target is a regular file. An attacker could symlink id_ed25519 to
-# /etc/shadow, causing chmod to change permissions on the target file.
-# The [[ ! -L ]] guard prevents this by rejecting symlinks before chmod runs.
 [[ ! -L /app/data/.ssh/id_ed25519 && -f /app/data/.ssh/id_ed25519 ]] && chmod 600 /app/data/.ssh/id_ed25519
 [[ ! -L /app/data/.ssh/id_ed25519.pub && -f /app/data/.ssh/id_ed25519.pub ]] && chmod 644 /app/data/.ssh/id_ed25519.pub
 
-# Pin GitHub SSH host key — replace any existing github.com entries to prevent
-# poisoned keys from persisting. Avoids MITM risk from ssh-keyscan.
 PINNED_GITHUB_KEY="github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
-# Guard: if known_hosts is a symlink, an attacker could point it at a sensitive
-# file (e.g., /etc/shadow). grep would read that file's contents and write them
-# to a world-readable temp file, leaking sensitive data. Remove rogue symlinks.
 if [[ -L /app/data/.ssh/known_hosts ]]; then
 	rm -f /app/data/.ssh/known_hosts
 fi
-# Strip existing github.com entries (if file exists), then append the pinned key.
-# Initialize temp file first, then conditionally populate — avoids else branch.
 : >/tmp/known_hosts.tmp
 if [[ -f /app/data/.ssh/known_hosts ]]; then
 	grep -vE '^github\.com[ ,]' /app/data/.ssh/known_hosts >/tmp/known_hosts.tmp || true
@@ -125,8 +114,6 @@ chmod 644 /app/data/.ssh/known_hosts
 # ============================================
 # PHASE 5: Git Configuration
 # ============================================
-# /home/cloudron/.gitconfig is a symlink to /app/data/.gitconfig (set up in Dockerfile)
-# Ownership already set in PHASE 2
 gosu cloudron:cloudron git config --global user.name "AI DevOps Worker"
 gosu cloudron:cloudron git config --global user.email "worker@aidevops.sh"
 gosu cloudron:cloudron git config --global init.defaultBranch main
@@ -134,10 +121,6 @@ gosu cloudron:cloudron git config --global init.defaultBranch main
 # ============================================
 # PHASE 6: Environment Setup
 # ============================================
-# API keys are injected via Cloudron environment variables
-# ANTHROPIC_API_KEY, GH_TOKEN, OPENROUTER_API_KEY are set in Cloudron app config
-
-# Configure gh CLI auth if GH_TOKEN is set
 if [[ -n "${GH_TOKEN:-}" ]]; then
 	echo "==> Configuring GitHub CLI authentication"
 	echo "$GH_TOKEN" | gosu cloudron:cloudron gh auth login --with-token 2>/dev/null || true
@@ -147,23 +130,46 @@ fi
 # PHASE 7: Deploy aidevops agents
 # ============================================
 echo "==> Deploying aidevops agents"
-# Run setup in non-interactive mode to deploy agents
 export HOME=/home/cloudron
 export AIDEVOPS_NON_INTERACTIVE=true
 gosu cloudron:cloudron aidevops update 2>/dev/null || echo "==> aidevops update skipped (first run or no network)"
 
 # ============================================
+# PHASE 7b: [SCALEPASS] Apply patches against the freshly-installed framework
+# ============================================
+if [[ -d /app/code/patches ]]; then
+	echo "==> Applying ScalePass patches"
+	gosu cloudron:cloudron /app/code/patches/apply.sh || {
+		echo "==> WARNING: apply.sh exit non-zero. Cron will retry every 5 min; investigate if persistent."
+	}
+fi
+
+# ============================================
+# PHASE 7c: [SCALEPASS] Install cron for periodic re-apply
+# Handles in-container `aidevops update` events that overwrite /app/data/.aidevops/*.
+# apply.sh is idempotent — re-applying when already-applied is a silent no-op.
+# ============================================
+cat > /etc/cron.d/scalepass-patches-reapply <<'EOF'
+# ScalePass: re-apply patches every 5 min to survive in-container framework updates.
+# apply.sh is idempotent — no-op when patches already applied.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+*/5 * * * * cloudron /app/code/patches/apply.sh >> /app/data/logs/patches-reapply.log 2>&1
+EOF
+chmod 644 /etc/cron.d/scalepass-patches-reapply
+
+# ============================================
 # PHASE 8: Final Permissions
 # ============================================
-# Re-chown in case earlier phases created new files as root
-# Use -h to avoid following symlinks (same rationale as PHASE 2)
 chown -hR cloudron:cloudron /app/data
-
-# Mark initialized
 touch /app/data/.initialized
 
 # ============================================
-# PHASE 9: Launch Server
+# PHASE 9: Launch cron daemon + server
+# ScalePass change: cron daemon launched in background before server.
 # ============================================
+echo "==> Starting cron daemon (for ScalePass patch re-apply)"
+service cron start || /usr/sbin/cron
+
 echo "==> Launching AI DevOps Worker server"
 exec gosu cloudron:cloudron node /app/code/server.js

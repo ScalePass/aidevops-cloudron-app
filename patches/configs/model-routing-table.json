@@ -1,0 +1,71 @@
+{
+  "_comment": "ScalePass per-client routing override. Read by the framework's select() FIRST when present at agents/custom/configs/. Restores Anthropic-primary routing for tiers that need reasoning quality; opencode/big-pickle remains the universal last-resort fallback. Verified against kidzcity 2026-05-15.",
+  "tiers": {
+    "local": {
+      "models": [
+        "anthropic/claude-sonnet-4-6",
+        "anthropic/claude-opus-4-6",
+        "opencode/big-pickle"
+      ]
+    },
+    "haiku": {
+      "models": [
+        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-sonnet-4-6",
+        "opencode/big-pickle"
+      ]
+    },
+    "flash": {
+      "models": [
+        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-sonnet-4-6",
+        "opencode/big-pickle"
+      ]
+    },
+    "sonnet": {
+      "models": [
+        "anthropic/claude-sonnet-4-6",
+        "anthropic/claude-opus-4-6",
+        "opencode/big-pickle"
+      ]
+    },
+    "pro": {
+      "models": [
+        "anthropic/claude-opus-4-7",
+        "anthropic/claude-opus-4-6",
+        "anthropic/claude-sonnet-4-6",
+        "opencode/big-pickle"
+      ]
+    },
+    "opus": {
+      "models": [
+        "anthropic/claude-opus-4-7",
+        "anthropic/claude-opus-4-6",
+        "anthropic/claude-sonnet-4-6",
+        "opencode/big-pickle"
+      ]
+    },
+    "coding": {
+      "models": [
+        "anthropic/claude-opus-4-7",
+        "anthropic/claude-opus-4-6",
+        "anthropic/claude-sonnet-4-6",
+        "opencode/big-pickle"
+      ]
+    },
+    "eval": {
+      "models": [
+        "anthropic/claude-sonnet-4-6",
+        "anthropic/claude-opus-4-6",
+        "opencode/big-pickle"
+      ]
+    },
+    "health": {
+      "models": [
+        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-sonnet-4-6",
+        "opencode/big-pickle"
+      ]
+    }
+  }
+}
