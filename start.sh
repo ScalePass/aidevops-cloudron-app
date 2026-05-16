@@ -9,6 +9,10 @@
 #   - Phase 7b: NEW — apply ScalePass patches from /app/code/patches/ to /app/data/.aidevops/.
 #   - Phase 7c: NEW — install cron entry to re-apply patches every 5 min
 #                     (handles in-container `aidevops update` events).
+#   - Phase 7d: NEW — npm install opencode-aidevops plugin deps (plugin ships
+#                     without node_modules).
+#   - Phase 7e: NEW — `aidevops setup --scope pulse` to install supervisor pulse
+#                     cron (non-interactive update doesn't run that stage).
 #   - cron daemon launched in Phase 9 (background) before server.js.
 # All other phases inherited verbatim from upstream.
 
@@ -142,7 +146,9 @@ echo "==> Deploying aidevops agents"
 # (HOME normalize in pulse-wrapper.sh) — apply at this scope too.
 export HOME=/app/data
 export AIDEVOPS_NON_INTERACTIVE=true
-gosu cloudron:cloudron env HOME=/app/data aidevops update || echo "==> aidevops update exited non-zero (continuing — cron + Phase 9 will retry framework health)"
+# ScalePass: USER=cloudron — gosu doesn't propagate USER and aidevops' post-setup
+# module references it unguarded (set -u → unbound variable, kills the stage).
+gosu cloudron:cloudron env HOME=/app/data USER=cloudron aidevops update || echo "==> aidevops update exited non-zero (continuing — cron + Phase 9 will retry framework health)"
 
 # ============================================
 # PHASE 7b: [SCALEPASS] Apply patches against the freshly-installed framework
@@ -172,6 +178,19 @@ if [[ -d "$OPENCODE_PLUGIN_DIR" && -f "$OPENCODE_PLUGIN_DIR/package.json" ]]; th
 fi
 
 # Phase 7c (cron install) is now done at Dockerfile build time — /etc is read-only at runtime in Cloudron.
+
+# ============================================
+# PHASE 7e: [SCALEPASS] install + start supervisor pulse
+# `aidevops update --non-interactive` only deploys agents + safe migrations; it
+# skips setup_supervisor_pulse. We invoke the scoped setup directly so the pulse
+# cron+wrapper come up on first boot without operator interaction. Idempotent —
+# noop when pulse cron is already installed.
+# ============================================
+echo "==> Installing supervisor pulse scheduler"
+gosu cloudron:cloudron env HOME=/app/data USER=cloudron \
+    AIDEVOPS_NON_INTERACTIVE=true AIDEVOPS_SUPERVISOR_PULSE=true \
+    aidevops setup --scope pulse 2>&1 | tail -20 \
+    || echo "==> aidevops setup --scope pulse non-zero (will retry on next boot)"
 
 # ============================================
 # PHASE 8: Final Permissions

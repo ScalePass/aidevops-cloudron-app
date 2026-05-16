@@ -18,7 +18,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     patch \
     cron \
+    ripgrep \
     && rm -rf /var/lib/apt/lists/*
+
+# ScalePass: cloudron user ships with /usr/sbin/nologin as login shell. When
+# opencode (running as cloudron via gosu) spawns its Bash tool, the spawn picks
+# up the user's login shell from /etc/passwd and every tool call returns the
+# nologin banner "This account is currently not available." with exit 1. Fix:
+# give cloudron a real shell so opencode's tool subprocess actually runs bash.
+# /etc/passwd is mounted read-only at runtime, so this MUST live in the image.
+RUN usermod -s /bin/bash cloudron
 
 # ============================================
 # Node.js 20 LTS via NodeSource
