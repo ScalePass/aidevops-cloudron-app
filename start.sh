@@ -128,35 +128,27 @@ fi
 
 # ============================================
 # PHASE 7: Deploy aidevops agents
+# ScalePass change: keep stderr (was 2>/dev/null) and || true so non-zero rc on first
+# runs (e.g., network blips during git clone) doesn't kill start.sh before Phase 9.
+# /home/cloudron/.aidevops is symlinked to /app/data/.aidevops by the Dockerfile so
+# aidevops's framework files land in the persistent volume.
 # ============================================
 echo "==> Deploying aidevops agents"
 export HOME=/home/cloudron
 export AIDEVOPS_NON_INTERACTIVE=true
-gosu cloudron:cloudron aidevops update 2>/dev/null || echo "==> aidevops update skipped (first run or no network)"
+gosu cloudron:cloudron aidevops update || echo "==> aidevops update exited non-zero (continuing — cron + Phase 9 will retry framework health)"
 
 # ============================================
 # PHASE 7b: [SCALEPASS] Apply patches against the freshly-installed framework
+# Continues past failure — the periodic cron (installed by Dockerfile) retries every 5 min.
 # ============================================
 if [[ -d /app/code/patches ]]; then
 	echo "==> Applying ScalePass patches"
-	gosu cloudron:cloudron /app/code/patches/apply.sh || {
-		echo "==> WARNING: apply.sh exit non-zero. Cron will retry every 5 min; investigate if persistent."
-	}
+	gosu cloudron:cloudron /app/code/patches/apply.sh || \
+		echo "==> apply.sh exit non-zero on first boot (framework may not be initialised yet); cron will retry"
 fi
 
-# ============================================
-# PHASE 7c: [SCALEPASS] Install cron for periodic re-apply
-# Handles in-container `aidevops update` events that overwrite /app/data/.aidevops/*.
-# apply.sh is idempotent — re-applying when already-applied is a silent no-op.
-# ============================================
-cat > /etc/cron.d/scalepass-patches-reapply <<'EOF'
-# ScalePass: re-apply patches every 5 min to survive in-container framework updates.
-# apply.sh is idempotent — no-op when patches already applied.
-SHELL=/bin/bash
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-*/5 * * * * cloudron /app/code/patches/apply.sh >> /app/data/logs/patches-reapply.log 2>&1
-EOF
-chmod 644 /etc/cron.d/scalepass-patches-reapply
+# Phase 7c (cron install) is now done at Dockerfile build time — /etc is read-only at runtime in Cloudron.
 
 # ============================================
 # PHASE 8: Final Permissions

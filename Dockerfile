@@ -55,12 +55,29 @@ RUN curl -fsSL "https://github.com/anomalyco/opencode/releases/latest/download/o
 
 # ============================================
 # Writable home directories (Cloudron read-only /app/code workaround)
+# ScalePass addition: also symlink /home/cloudron/.aidevops → /app/data/.aidevops
+# so `aidevops update` populates the persistent volume (matches kidzcity's runtime layout).
 # ============================================
-RUN mkdir -p /app/data/.ssh /app/data/.config \
-    && rm -rf /home/cloudron/.ssh /home/cloudron/.config /home/cloudron/.gitconfig \
+RUN mkdir -p /app/data/.ssh /app/data/.config /app/data/.aidevops \
+    && rm -rf /home/cloudron/.ssh /home/cloudron/.config /home/cloudron/.gitconfig /home/cloudron/.aidevops \
     && ln -sfn /app/data/.ssh /home/cloudron/.ssh \
     && ln -sfn /app/data/.config /home/cloudron/.config \
-    && ln -sfn /app/data/.gitconfig /home/cloudron/.gitconfig
+    && ln -sfn /app/data/.gitconfig /home/cloudron/.gitconfig \
+    && ln -sfn /app/data/.aidevops /home/cloudron/.aidevops
+
+# ============================================
+# ScalePass: install patch re-apply cron at BUILD time
+# /etc is mounted read-only at runtime so we cannot write the cron file from start.sh.
+# This file is baked into the image; cron daemon launched in start.sh Phase 9 picks it up.
+# ============================================
+RUN printf '%s\n' \
+    '# ScalePass: re-apply patches every 5 min to survive in-container framework updates.' \
+    '# apply.sh is idempotent — no-op when patches already applied.' \
+    'SHELL=/bin/bash' \
+    'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+    '*/5 * * * * cloudron /app/code/patches/apply.sh >> /app/data/logs/patches-reapply.log 2>&1' \
+    > /etc/cron.d/scalepass-patches-reapply \
+    && chmod 644 /etc/cron.d/scalepass-patches-reapply
 
 # ============================================
 # Application code + ScalePass patches
