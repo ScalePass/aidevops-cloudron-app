@@ -47,7 +47,10 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # ScalePass change: pinned `aidevops@3.15.38` (was unversioned upstream).
 # The pinned version matches kidzcity's currently-running production framework.
 # See UPSTREAM.md for the upgrade ritual.
-RUN curl -fsSL "https://github.com/anomalyco/opencode/releases/latest/download/opencode-linux-x64.tar.gz" \
+# ScalePass pin: opencode v1.14.45 matches kidzcity. v1.15.1+ has incompatible
+# model-name format (bare names instead of provider/model) which breaks the
+# framework canary. v1.14.45 stays compatible with framework v3.15.38's routing.
+RUN curl -fsSL "https://github.com/anomalyco/opencode/releases/download/v1.14.45/opencode-linux-x64.tar.gz" \
     | tar -xz -C /usr/local/bin \
     && chmod +x /usr/local/bin/opencode \
     && opencode --version \
