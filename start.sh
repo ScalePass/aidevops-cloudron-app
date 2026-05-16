@@ -11,8 +11,10 @@
 #                     (handles in-container `aidevops update` events).
 #   - Phase 7d: NEW — npm install opencode-aidevops plugin deps (plugin ships
 #                     without node_modules).
-#   - Phase 7e: NEW — `aidevops setup --scope pulse` to install supervisor pulse
-#                     cron (non-interactive update doesn't run that stage).
+#   - Phase 7e: NEW — `aidevops setup --scope pulse` to start a pulse session.
+#                     (Cron file itself is baked at build time in Dockerfile —
+#                     /var/spool/cron/ is read-only at runtime so the framework's
+#                     own crontab-based install silently no-ops.)
 #   - cron daemon launched in Phase 9 (background) before server.js.
 # All other phases inherited verbatim from upstream.
 

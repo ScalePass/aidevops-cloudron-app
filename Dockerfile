@@ -93,6 +93,26 @@ RUN printf '%s\n' \
     && chmod 644 /etc/cron.d/scalepass-patches-reapply
 
 # ============================================
+# ScalePass: install supervisor-pulse cron at BUILD time
+# The framework's own pulse-cron install (setup_supervisor_pulse) silently fails
+# in Cloudron containers because /var/spool/cron/ is read-only at runtime —
+# `crontab -` cannot write to it. We bypass via /etc/cron.d/ which IS writable
+# at build time (this RUN step), giving the cron daemon a system entry to fire
+# pulse-wrapper.sh on the framework's standard 2-minute cadence.
+#
+# flock prevents overlapping runs (pulse-wrapper has its own mkdir lock too).
+# Logs land in scheduler-pulse.log so they're distinguishable from the
+# session-flag pulse.log.
+# ============================================
+RUN printf '%s\n' \
+    '# ScalePass: supervisor-pulse scheduler — runs every 2 min (framework default).' \
+    'SHELL=/bin/bash' \
+    'PATH=/app/data/bin:/usr/local/node-22.14.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+    '*/2 * * * * cloudron HOME=/app/data USER=cloudron AIDEVOPS_SUPERVISOR_PULSE=true AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST=anthropic,opencode AIDEVOPS_NON_INTERACTIVE=true flock -n /tmp/scalepass-pulse.lock /app/data/.aidevops/agents/scripts/pulse-wrapper.sh >> /app/data/.aidevops/logs/scheduler-pulse.log 2>&1' \
+    > /etc/cron.d/scalepass-supervisor-pulse \
+    && chmod 644 /etc/cron.d/scalepass-supervisor-pulse
+
+# ============================================
 # Application code + ScalePass patches
 # ============================================
 WORKDIR /app/code
