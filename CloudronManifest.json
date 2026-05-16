@@ -17,9 +17,5 @@
   "addons": {
     "localstorage": {}
   },
-  "tcpPorts": {},
-  "env": {
-    "AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST": "anthropic,opencode",
-    "AIDEVOPS_NON_INTERACTIVE": "true"
-  }
+  "tcpPorts": {}
 }
