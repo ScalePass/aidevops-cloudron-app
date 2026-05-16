@@ -35,6 +35,7 @@ mkdir -p /app/data/logs
 mkdir -p /app/data/.ssh
 mkdir -p /app/data/.config
 mkdir -p /app/data/aidevops/agents
+mkdir -p /app/data/.aidevops
 mkdir -p /run/app
 [[ ! -L /app/data/.gitconfig ]] && touch /app/data/.gitconfig
 chown -hR cloudron:cloudron /app/data
