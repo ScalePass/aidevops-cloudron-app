@@ -58,12 +58,13 @@ RUN curl -fsSL "https://github.com/anomalyco/opencode/releases/latest/download/o
 # ScalePass addition: also symlink /home/cloudron/.aidevops → /app/data/.aidevops
 # so `aidevops update` populates the persistent volume (matches kidzcity's runtime layout).
 # ============================================
-RUN mkdir -p /app/data/.ssh /app/data/.config /app/data/.aidevops \
-    && rm -rf /home/cloudron/.ssh /home/cloudron/.config /home/cloudron/.gitconfig /home/cloudron/.aidevops \
+RUN mkdir -p /app/data/.ssh /app/data/.config /app/data/.aidevops /app/data/Git \
+    && rm -rf /home/cloudron/.ssh /home/cloudron/.config /home/cloudron/.gitconfig /home/cloudron/.aidevops /home/cloudron/Git \
     && ln -sfn /app/data/.ssh /home/cloudron/.ssh \
     && ln -sfn /app/data/.config /home/cloudron/.config \
     && ln -sfn /app/data/.gitconfig /home/cloudron/.gitconfig \
-    && ln -sfn /app/data/.aidevops /home/cloudron/.aidevops
+    && ln -sfn /app/data/.aidevops /home/cloudron/.aidevops \
+    && ln -sfn /app/data/Git /home/cloudron/Git
 
 # ============================================
 # ScalePass: install patch re-apply cron at BUILD time
