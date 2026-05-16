@@ -154,6 +154,23 @@ if [[ -d /app/code/patches ]]; then
 		echo "==> apply.sh exit non-zero on first boot (framework may not be initialised yet); cron will retry"
 fi
 
+# ============================================
+# PHASE 7d: [SCALEPASS] npm install the opencode-aidevops plugin
+# The plugin ships with package.json but NOT node_modules. Without dependencies
+# installed, opencode runtime crashes with "InstanceRef not provided" or
+# "g.type undefined" inside its bun-compiled internals (issue #30 of the
+# 2026-05-16 install marathon). Idempotent — npm install is a no-op when
+# node_modules/ is already up to date.
+# ============================================
+OPENCODE_PLUGIN_DIR=/app/data/.aidevops/agents/plugins/opencode-aidevops
+if [[ -d "$OPENCODE_PLUGIN_DIR" && -f "$OPENCODE_PLUGIN_DIR/package.json" ]]; then
+	if [[ ! -d "$OPENCODE_PLUGIN_DIR/node_modules" ]]; then
+		echo "==> Installing opencode-aidevops plugin npm dependencies"
+		(cd "$OPENCODE_PLUGIN_DIR" && gosu cloudron:cloudron npm install --no-audit --no-fund 2>&1) \
+			|| echo "==> WARNING: plugin npm install failed; canary will likely fail"
+	fi
+fi
+
 # Phase 7c (cron install) is now done at Dockerfile build time — /etc is read-only at runtime in Cloudron.
 
 # ============================================
