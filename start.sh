@@ -150,7 +150,18 @@ export HOME=/app/data
 export AIDEVOPS_NON_INTERACTIVE=true
 # ScalePass: USER=cloudron — gosu doesn't propagate USER and aidevops' post-setup
 # module references it unguarded (set -u → unbound variable, kills the stage).
-gosu cloudron:cloudron env HOME=/app/data USER=cloudron aidevops update || echo "==> aidevops update exited non-zero (continuing — cron + Phase 9 will retry framework health)"
+#
+# ScalePass F2 (2026-05-18): wrap in `timeout 300` so a stalled `aidevops update`
+# cannot block start.sh from reaching Phase 9 (cron daemon + server.js).
+# Without this guard we observed Phase 7 hanging 2+ hours, leaving the
+# container with no scheduled pulse cycles. Patch 003's empirical test
+# (envelope-test investigation) had to be unblocked by a manual
+# `service cron start` — F2 makes the rebuild self-sufficient.
+# rc=124 is timeout's signal that the inner command was killed; treat it the
+# same as any other non-zero rc — log and continue. The 5-min budget is
+# generous; observed completion when not hung is well under 60s.
+timeout 300 gosu cloudron:cloudron env HOME=/app/data USER=cloudron aidevops update \
+    || echo "==> aidevops update exited non-zero (rc=$?; continuing — cron + Phase 9 will retry framework health)"
 
 # ============================================
 # PHASE 7b: [SCALEPASS] Apply patches against the freshly-installed framework

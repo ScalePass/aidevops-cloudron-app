@@ -54,9 +54,35 @@ patch_marker() {
 }
 
 # Find the target file the patch modifies — from the first "+++ b/..." header.
+# ScalePass F7 (2026-05-18): translate `.agents/X` (upstream-repo source layout,
+# which the patch files reference for `ci/verify-upstream-compat.sh` to keep
+# applying against upstream HEAD) → `agents/X` (the deployed layout under
+# /app/data/.aidevops/agents/). Pre-F7 the existence-check + `patch -p1` both
+# resolved to /app/data/.aidevops/.agents/X which does not exist, so patches
+# 001 + 003 silently failed every apply.sh run on every container. The bug
+# was masked because Cloudron app env vars (AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST,
+# HOME) delivered the runtime behaviours attributed to those patches.
 patch_target_file() {
     local patch="$1"
-    grep -m1 -E '^\+\+\+ ' "$patch" | sed 's|^+++ b/||' | sed 's|^+++ ||'
+    # Strip `+++ b/` or `+++ ` prefix, then translate `.agents/X` → `agents/X`.
+    # Implemented entirely via sed because bash 5.3.9 on macOS (which the
+    # operator may use for local apply.sh testing) SIGSEGVs on the equivalent
+    # `${raw#.agents/}` parameter-expansion form. Linux bash is fine but sed
+    # is portable to both.
+    grep -m1 -E '^\+\+\+ ' "$patch" \
+        | sed -E 's|^\+\+\+ b?/?||' \
+        | sed -E 's|^\.agents/|agents/|'
+}
+
+# ScalePass F7: rewrite the patch's path headers in-flight so `patch -p1` from
+# $TARGET_DIR writes to the translated `agents/X` location. Idempotent — the
+# sed expressions are no-ops for patches that already use `agents/` (no dot).
+_translated_patch_stream() {
+    local patch="$1"
+    sed \
+        -e 's|^--- a/\.agents/|--- a/agents/|' \
+        -e 's|^+++ b/\.agents/|+++ b/agents/|' \
+        "$patch"
 }
 
 for patch in "$PATCHES_DIR"/*.patch; do
@@ -84,8 +110,8 @@ for patch in "$PATCHES_DIR"/*.patch; do
         continue
     fi
 
-    # Not applied — try forward apply
-    if patch -p1 --forward --batch --silent --reject-file=/dev/null < "$patch" >/dev/null 2>&1; then
+    # Not applied — try forward apply via translated stream (ScalePass F7).
+    if _translated_patch_stream "$patch" | patch -p1 --forward --batch --silent --reject-file=/dev/null >/dev/null 2>&1; then
         # Verify marker now present (paranoid post-condition check)
         if grep -qF -- "$marker" "$TARGET_DIR/$target"; then
             applied=$((applied + 1))

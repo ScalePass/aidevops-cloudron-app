@@ -113,6 +113,68 @@ RUN printf '%s\n' \
     && chmod 644 /etc/cron.d/scalepass-supervisor-pulse
 
 # ============================================
+# ScalePass F-merge (2026-05-18): install pulse-merge-routine cron at BUILD time.
+#
+# Per pulse-merge-routine.sh docstring (framework):
+#   "Decouples merge_ready_prs_all_repos() from the monolithic pulse cycle so
+#    green PRs are merged within ~3 min of CI completion regardless of how
+#    long the preflight stack takes (typically 5-10 min for a full pulse cycle).
+#    [...] In a 24h sample, the merge pass ran only ~7 times despite ~40+
+#    pulse cycles. Green PRs sat unmerged for 10+ minutes."
+#
+# The framework ships pulse-merge-routine.sh but NO launchd/cron config to
+# schedule it. On Linux/Cloudron we therefore must install our own.
+#
+# Without this cron: empirically measured 7-15 min merge_wait per PR even
+# at queue-head position (envelope-test 2026-05-18 per
+# docs/investigations/2026-05-18-patch003-envelope-test.md).
+#
+# Expected effect: merge_wait drops from ~10min avg to ~2-3min (routine cadence).
+# Per-routine duration is typically <30s when no work to merge; the script's
+# own ~/.aidevops/.agent-workspace/locks/pulse-merge-routine.lock prevents
+# overlap so we omit redundant flock at the cron layer.
+# ============================================
+RUN printf '%s\n' \
+    '# ScalePass: pulse-merge-routine — runs every 2 min (independent of supervisor-pulse).' \
+    '# Decouples PR merge from the monolithic pulse cycle preflight stack.' \
+    'SHELL=/bin/bash' \
+    'PATH=/app/data/bin:/usr/local/node-22.14.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+    '*/2 * * * * cloudron HOME=/app/data USER=cloudron AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST=anthropic,opencode AIDEVOPS_NON_INTERACTIVE=true /app/data/.aidevops/agents/scripts/pulse-merge-routine.sh >> /app/data/.aidevops/logs/pulse-merge-routine.log 2>&1' \
+    > /etc/cron.d/scalepass-pulse-merge-routine \
+    && chmod 644 /etc/cron.d/scalepass-pulse-merge-routine
+
+# ============================================
+# ScalePass F-stuck (2026-05-18): install headless-orphan-cleanup cron.
+#
+# v3.15.55 commit `1cedb5c7a fix(pulse-cleanup): preserve dirty worktrees and
+# reflog-only WIP` hardened pulse-cleanup to NEVER auto-remove dirty
+# worktrees (safety improvement to protect interactive editor sessions on
+# upstream marcusquinn deployments). Side effect on ScalePass batch workloads:
+# headless workers that stall mid-task leave dirty git state. Their worktrees
+# persist 6h+ (or never; _cleanup_single_worktree refuses dirty removals
+# even past the 6h threshold). Re-dispatches see the worktree and either
+# spawn parallel workers on the same session-key OR get stuck.
+#
+# Empirically observed 2026-05-18 envelope test: issue #1524 worker running
+# 14:01 elapsed with multiple sessions on the same key.
+#
+# This cron runs a scoped force-cleanup on `feature/auto-*-gh*` branches
+# only (the headless-worker branch naming convention) where:
+#   - no live worker process matches in pgrep argv
+#   - age > 30 min
+#   - no open PR for the branch
+# Preserves upstream's safety for interactive worktrees (branch != feature/auto-*).
+# ============================================
+RUN printf '%s\n' \
+    '# ScalePass: headless-worker orphan worktree cleanup — every 15 min.' \
+    '# Scoped to feature/auto-*-gh* branches only; leaves interactive worktrees alone.' \
+    'SHELL=/bin/bash' \
+    'PATH=/app/data/bin:/usr/local/node-22.14.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+    '*/15 * * * * cloudron /app/code/scalepass/headless-orphan-cleanup.sh >> /app/data/.aidevops/logs/scalepass-headless-orphan-cleanup.log 2>&1' \
+    > /etc/cron.d/scalepass-headless-orphan-cleanup \
+    && chmod 644 /etc/cron.d/scalepass-headless-orphan-cleanup
+
+# ============================================
 # Application code + ScalePass patches
 # ============================================
 WORKDIR /app/code
@@ -123,9 +185,13 @@ COPY server.js /app/code/server.js
 # at container start, and re-applied by the cron entry installed in Phase 7c
 # every 5 minutes (handles in-container `aidevops update` events).
 COPY patches /app/code/patches
+# ScalePass: COPY helper scripts. F-stuck — headless-orphan-cleanup.sh runs
+# every 15 min via /etc/cron.d/scalepass-headless-orphan-cleanup.
+COPY scalepass /app/code/scalepass
 
 RUN chmod +x /app/code/start.sh \
-    && chmod +x /app/code/patches/apply.sh
+    && chmod +x /app/code/patches/apply.sh \
+    && chmod +x /app/code/scalepass/headless-orphan-cleanup.sh
 
 EXPOSE 3000
 
