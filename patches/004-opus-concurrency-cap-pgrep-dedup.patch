@@ -1,0 +1,35 @@
+--- a/.agents/scripts/pulse-dispatch-lib.sh
++++ b/.agents/scripts/pulse-dispatch-lib.sh
+@@ -1101,6 +1101,7 @@
+ # Returns:
+ #   0 - proceed with dispatch (not opus, or inflight < cap)
+ #   1 - deferred (opus inflight >= cap); caller should `return 1`
++# [ScalePass patch 004 — opus_concurrency_cap dedup by worktree dir]
+ #######################################
+ _dispatch_check_model_concurrency_cap() {
+ 	local issue_number="$1"
+@@ -1134,8 +1135,23 @@
+ 	#
+ 	# pgrep exits 1 with no output when no processes match — perfectly normal.
+ 	# Assign to a variable first with || true to avoid triggering set -o pipefail.
++	#
++	# ScalePass patch 004 (2026-05-19): the original implementation matched
++	# both the sandbox-exec-helper.sh parent AND the opencode child for each
++	# worker — pgrep -f 'opencode.*-m anthropic/claude-opus' is found in
++	# the cmdline of both. This double-counted each worker, so cap=4
++	# effectively gated at 2 actual workers. Definitive evidence from the
++	# 2026-05-18 envelope test on kidzcity-aidevops: 2,605 deferral events
++	# across the window; inflight values 4-14 observed (cap=4 enforcement
++	# violated routinely). 89 tier:thinking issues each deferred 11-28 times
++	# and never dispatched. Fix: dedupe by '--dir <worktree>' argv —
++	# sandbox-exec-helper.sh and opencode both inherit the same --dir from
++	# headless-runtime-helper.sh, so deduping by that argv counts each
++	# worker exactly once.
++	# Reference: docs/investigations/2026-05-19-f13-silent-dispatch-skip-and-f12-label-docs.md
+ 	local _opus_pids=""
+-	_opus_pids=$(pgrep -f 'opencode.*-m anthropic/claude-opus' 2>/dev/null) || true
++	_opus_pids=$(pgrep -af 'opencode.*-m anthropic/claude-opus' 2>/dev/null \
++		| grep -oE -- '--dir [^[:space:]]+' | sort -u) || true
+ 	local opus_inflight=0
+ 	if [[ -n "$_opus_pids" ]]; then
+ 		opus_inflight=$(printf '%s\n' "$_opus_pids" | wc -l | tr -d ' ')

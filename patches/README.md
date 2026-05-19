@@ -10,6 +10,7 @@ patches/
 ├── README.md                               this file
 ├── 001-pulse-wrapper-allowlist-and-home.patch
 ├── 003-account-slot-multiplier-default.patch
+├── 004-opus-concurrency-cap-pgrep-dedup.patch
 └── configs/
     └── model-routing-table.json            per-client config drop (NOT a patch — full-file)
 ```
@@ -76,6 +77,34 @@ Raised to `4` as a conservative envelope test (2× upstream). With 1 account thi
 - `pulse.log` for `Dispatch_capacity: ... account_cap=4` (confirms patch is active)
 - `pulse.log` for `Dispatch_max: parallel iter=4` or higher (confirms cap is no longer at 2)
 - `pulse.log` for repeated `rate_limits > 0` followed by `final_max=(final_max+1)/2` halving — that's the oscillation pattern to weigh
+
+### 004 — `pulse-dispatch-lib.sh::_dispatch_check_model_concurrency_cap` dedup by --dir
+
+**Why this exists:**
+
+The framework caps concurrent opus workers via `pgrep -f 'opencode.*-m anthropic/claude-opus'` (pulse-dispatch-lib.sh:1138). That regex matches BOTH the `sandbox-exec-helper.sh run … -- opencode run … -m anthropic/claude-opus-X …` parent process AND the `opencode run … -m anthropic/claude-opus-X …` child process for each worker — so each actual worker counts as **2** in the cap check.
+
+Net effect: `OPUS_CONCURRENCY_CAP=4` gates dispatches at **2 actual concurrent workers** (sometimes more, depending on mid-lifecycle race), and the gate is violated upward routinely (we observed `inflight=14` during the 2026-05-18 envelope test).
+
+Compounding bug: deferred candidates have no aging / escalation path. Under sustained opus saturation, 89 correctly-labelled `tier:thinking` issues each got deferred 11-28 times (one issue 28×) over 30+ hours, never dispatching, never NMR'd. **2,605 total deferral events across the test window.** Full investigation: `docs/investigations/2026-05-19-f13-silent-dispatch-skip-and-f12-label-docs.md`.
+
+**Fix:** dedupe by the `--dir <worktree>` argv. Both the sandbox-exec-helper and opencode inherit the same `--dir` from headless-runtime-helper.sh, so deduping by it counts each worker exactly once regardless of process lifecycle phase.
+
+```diff
+-	_opus_pids=$(pgrep -f 'opencode.*-m anthropic/claude-opus' 2>/dev/null) || true
++	_opus_pids=$(pgrep -af 'opencode.*-m anthropic/claude-opus' 2>/dev/null \
++		| grep -oE -- '--dir [^[:space:]]+' | sort -u) || true
+```
+
+**Target file:** `.agents/scripts/pulse-dispatch-lib.sh` (deployed at `/app/data/.aidevops/agents/scripts/pulse-dispatch-lib.sh`)
+
+**Insertion point:** marker in the function-header doc-block above `_dispatch_check_model_concurrency_cap`; pgrep line replacement in the function body.
+
+**Upstream merge candidate:** YES — this is a generic dispatcher correctness bug that affects any deployment using the opus concurrency cap. Worth submitting upstream as a PR.
+
+**Risk if reverted:** opus throughput halves on single-OAuth deployments (back to effective cap=2 actual workers). Heavy opus workloads will see tier:thinking issues stranded in defer-loop.
+
+**Doesn't address:** the secondary bug of no escalation after N defers. That's tracked separately (potential framework PR — apply `needs-maintainer-review` after 5+ defers to match dispatch-backoff convention).
 
 ## Config drops index
 
