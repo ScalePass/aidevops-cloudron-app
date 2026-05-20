@@ -1,0 +1,74 @@
+--- a/.agents/scripts/pulse-wrapper.sh
++++ b/.agents/scripts/pulse-wrapper.sh
+@@ -1598,6 +1598,7 @@
+ # _pulse_setup_canary_mode, _detect_invocation_source, and
+ # _record_invocation_source provided by pulse-wrapper-bootstrap.sh
+ # (GH#21311 / t2936-child).
++# [ScalePass patch 005 — F-NEW-3 zombie lock-holder + F-NEW-4 explicit exit logging]
+ 
+ main() {
+ 	# GH#18670: declare this process as headless BEFORE anything else runs
+@@ -1698,15 +1699,32 @@
+ 				# Fix: enforce PULSE_LOCK_MAX_AGE_S as a fall-through trigger so
+ 				# stale-but-alive locks reach the proper reclaim path below.
+ 				local _ir_age="" _ir_max=""
+-				_ir_age=$(_get_process_age "$_ir_pid" 2>/dev/null || true)
+-				_ir_max="${PULSE_LOCK_MAX_AGE_S:-1800}"
+-				if [[ "$_ir_age" =~ ^[0-9]+$ ]] && [[ "$_ir_age" -le "$_ir_max" ]]; then
+-					echo "[pulse-wrapper] Pulse already running (PID: ${_ir_pid}, age ${_ir_age}s), skipping" >>"$WRAPPER_LOGFILE"
+-					return 0
++				# ScalePass patch 005 (F-NEW-3, 2026-05-20): kill -0 returns true
++				# on zombie/<defunct> processes (PID still in process table until
++				# reaped by the parent shell), and `ps -p $pid -o etime=` still
++				# returns a valid elapsed-time string for them. Without an explicit
++				# zombie check, a defunct pulse-wrapper held the lock for 24+ min
++				# on kidzcity during the 2026-05-19 mini-stress, silently blocking
++				# 12+ cron cycles before manual intervention. /proc/$PID/status is
++				# universally available on Linux container hosts and is the
++				# canonical way to distinguish R/S/D (alive) from Z (zombie).
++				local _ir_state=""
++				_ir_state=$(awk '/^State:/{print $2; exit}' "/proc/${_ir_pid}/status" 2>/dev/null || true)
++				if [[ "$_ir_state" == "Z" ]]; then
++					echo "[pulse-wrapper] Lock holder PID ${_ir_pid} is a zombie (defunct) — deferring to acquire_instance_lock for reclaim (ScalePass F-NEW-3)" >>"$WRAPPER_LOGFILE"
++					# Fall through (no return) — acquire_instance_lock will detect the
++					# stale lock via _handle_existing_lock and force-reclaim with kill.
++				else
++					_ir_age=$(_get_process_age "$_ir_pid" 2>/dev/null || true)
++					_ir_max="${PULSE_LOCK_MAX_AGE_S:-1800}"
++					if [[ "$_ir_age" =~ ^[0-9]+$ ]] && [[ "$_ir_age" -le "$_ir_max" ]]; then
++						echo "[pulse-wrapper] Pulse already running (PID: ${_ir_pid}, age ${_ir_age}s), skipping" >>"$WRAPPER_LOGFILE"
++						return 0
++					fi
++					echo "[pulse-wrapper] Lock holder PID ${_ir_pid} age ${_ir_age}s > ceiling ${_ir_max}s — deferring to acquire_instance_lock for reclaim (t2829)" >>"$WRAPPER_LOGFILE"
++					# Fall through (no return) — acquire_instance_lock will detect the
++					# stale lock via _handle_existing_lock and force-reclaim with kill.
+ 				fi
+-				echo "[pulse-wrapper] Lock holder PID ${_ir_pid} age ${_ir_age}s > ceiling ${_ir_max}s — deferring to acquire_instance_lock for reclaim (t2829)" >>"$WRAPPER_LOGFILE"
+-				# Fall through (no return) — acquire_instance_lock will detect the
+-				# stale lock via _handle_existing_lock and force-reclaim with kill.
+ 			fi
+ 		fi
+ 	fi
+@@ -1732,7 +1750,12 @@
+ 	# kill -0 lock check at lines ~1208-1234 above.
+ 	if [[ "${PULSE_DRY_RUN:-0}" != "1" && "${PULSE_CANARY_MODE:-0}" != "1" ]]; then
+ 		# t3027 (GH#21584): idle-backoff gate (helper has full docs).
+-		_pulse_check_idle_backoff_gate || return 0
++		# ScalePass patch 005 (F-NEW-4, 2026-05-20): surface the silent return so
++		# cron-cycle gaps are diagnosable in pulse.log.
++		if ! _pulse_check_idle_backoff_gate; then
++			echo "[pulse-wrapper] Exiting: _pulse_check_idle_backoff_gate active (ScalePass F-NEW-4)" >>"$WRAPPER_LOGFILE"
++			return 0
++		fi
+ 
+ 		local _rl_ts_file="${HOME}/.aidevops/logs/pulse-wrapper-last-run.ts"
+ 		local _rl_now
+@@ -1784,6 +1807,8 @@
+ 	trap 'release_instance_lock' EXIT
+ 
+ 	if ! acquire_instance_lock; then
++		# ScalePass patch 005 (F-NEW-4, 2026-05-20): surface the silent return.
++		echo "[pulse-wrapper] Exiting: acquire_instance_lock failed (ScalePass F-NEW-4)" >>"$WRAPPER_LOGFILE"
+ 		return 0
+ 	fi
+ 

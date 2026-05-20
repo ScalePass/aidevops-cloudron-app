@@ -103,12 +103,41 @@ RUN printf '%s\n' \
 # flock prevents overlapping runs (pulse-wrapper has its own mkdir lock too).
 # Logs land in scheduler-pulse.log so they're distinguishable from the
 # session-flag pulse.log.
+#
+# F-NEW-2 (2026-05-20): the cron entry's env list is HARDCODED because cron
+# doesn't inherit Cloudron app env vars. Variables that need to be active in
+# the pulse-wrapper process tree MUST be listed inline here — operator-set
+# `cloudron env set` values do NOT propagate into cron-spawned processes
+# (same root cause as patch 003's PULSE_PROVIDER_ACCOUNT_SLOT_MULTIPLIER bug).
+#
+# Two safety bypasses added 2026-05-20 (validated empirically on kidzcity
+# 2026-05-19 — without them the dispatcher gets trapped in a "no_dispatchable_
+# evidence" guardrail loop on fresh containers and at the start of any
+# new workload burst):
+#
+# - AIDEVOPS_SKIP_PULSE_CURRENT_STATE_GUARDRAILS=1: bypasses the rolling-
+#   window "no_dispatchable evidence" guardrail. The guardrail is designed
+#   for general-purpose deployments where humans may be in the loop and a
+#   pause-and-wait is appropriate; ScalePass-spec workers are autonomous,
+#   and the guardrail's interpretation of "no recent dispatch = something's
+#   wrong, stop dispatching" creates a chicken-and-egg loop on cold-start.
+#
+# - AIDEVOPS_SKIP_CANARY_NEG_CACHE=1: bypasses the canary negative cache so
+#   fresh containers don't carry stale "canary failed" state from prior boots.
+#
+# F-NEW-1 mitigation (2026-05-20): the framework's post-merge-review-scanner
+# defaults to SCANNER_PR_LIMIT=1000 × SCANNER_DAYS=7 (run on a 24h cadence).
+# On stress-test repos with 100+ PRs/day, the once-per-day fire stalls the
+# pulse cycle for 15+ minutes iterating PRs via GraphQL. Tightened to
+# SCANNER_PR_LIMIT=200 + SCANNER_DAYS=2 here, which keeps the bot-feedback
+# follow-up function active while bounding the worst-case cycle duration to
+# ~2 min (the framework's intended per-stage cadence).
 # ============================================
 RUN printf '%s\n' \
     '# ScalePass: supervisor-pulse scheduler — runs every 2 min (framework default).' \
     'SHELL=/bin/bash' \
     'PATH=/app/data/bin:/usr/local/node-22.14.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
-    '*/2 * * * * cloudron HOME=/app/data USER=cloudron AIDEVOPS_SUPERVISOR_PULSE=true AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST=anthropic,opencode AIDEVOPS_NON_INTERACTIVE=true flock -n /tmp/scalepass-pulse.lock /app/data/.aidevops/agents/scripts/pulse-wrapper.sh >> /app/data/.aidevops/logs/scheduler-pulse.log 2>&1' \
+    '*/2 * * * * cloudron HOME=/app/data USER=cloudron AIDEVOPS_SUPERVISOR_PULSE=true AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST=anthropic,opencode AIDEVOPS_NON_INTERACTIVE=true AIDEVOPS_SKIP_PULSE_CURRENT_STATE_GUARDRAILS=1 AIDEVOPS_SKIP_CANARY_NEG_CACHE=1 SCANNER_PR_LIMIT=200 SCANNER_DAYS=2 flock -n /tmp/scalepass-pulse.lock /app/data/.aidevops/agents/scripts/pulse-wrapper.sh >> /app/data/.aidevops/logs/scheduler-pulse.log 2>&1' \
     > /etc/cron.d/scalepass-supervisor-pulse \
     && chmod 644 /etc/cron.d/scalepass-supervisor-pulse
 

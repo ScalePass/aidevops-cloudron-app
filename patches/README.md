@@ -11,6 +11,7 @@ patches/
 ├── 001-pulse-wrapper-allowlist-and-home.patch
 ├── 003-account-slot-multiplier-default.patch
 ├── 004-opus-concurrency-cap-pgrep-dedup.patch
+├── 005-pulse-wrapper-zombie-detection-and-exit-logging.patch
 └── configs/
     └── model-routing-table.json            per-client config drop (NOT a patch — full-file)
 ```
@@ -105,6 +106,27 @@ Compounding bug: deferred candidates have no aging / escalation path. Under sust
 **Risk if reverted:** opus throughput halves on single-OAuth deployments (back to effective cap=2 actual workers). Heavy opus workloads will see tier:thinking issues stranded in defer-loop.
 
 **Doesn't address:** the secondary bug of no escalation after N defers. That's tracked separately (potential framework PR — apply `needs-maintainer-review` after 5+ defers to match dispatch-backoff convention).
+
+### 005 — `pulse-wrapper.sh` zombie lock-holder detection + explicit exit-reason logging
+
+**Why this exists:**
+
+Two related operability defects observed during the 2026-05-19 kidzcity mini-stress:
+
+- **F-NEW-3 (zombie lock-holder):** the pulse-already-running short-circuit at `pulse-wrapper.sh:~1700` uses `kill -0 $PID` to test if the lock holder is alive. On Linux, `kill -0` returns success for zombie/`<defunct>` processes (the PID remains in the process table until reaped by the parent shell). `_get_process_age` via `ps -p $PID -o etime=` also returns a valid elapsed time for zombies. A defunct pulse-wrapper from an aborted prior cycle held the lock for 24+ minutes during the mini-stress, silently blocking 12+ cron cycles before manual `rm -f` of the pid-file. **Fix:** read `/proc/$PID/status` and check `State:`. If it's `Z` (zombie), fall through to the reclaim path instead of treating it as a healthy lock holder.
+
+- **F-NEW-4 (silent exits):** two early-exit paths return `0` without logging the reason — `_pulse_check_idle_backoff_gate` failure (line ~1735) and `acquire_instance_lock` failure (line ~1786). During the mini-stress, several cron cycles fired but produced only the `pulse-wrapper invoked: pid=N` line with zero further output, making the cause un-diagnosable without code-reading. **Fix:** add explicit `echo "[pulse-wrapper] Exiting: <reason>"` lines before both `return 0` statements.
+
+**Target file:** `.agents/scripts/pulse-wrapper.sh` (deployed at `/app/data/.aidevops/agents/scripts/pulse-wrapper.sh`)
+
+**Insertion points:**
+- Marker comment in the function-header doc-block above `main()` (column-0, satisfies apply.sh's `^\+#` marker probe).
+- Zombie check inside the existing `if kill -0 "$_ir_pid"` block at line ~1697.
+- Exit-reason `echo` lines before `return 0` at lines ~1735 and ~1786.
+
+**Upstream merge candidate:** YES — both fixes are generic operability improvements that benefit any deployment. Zombie PIDs are a defensive correctness issue (kill -0 isn't sufficient on its own); silent exits are an observability deficit. Worth submitting upstream.
+
+**Risk if reverted:** zombie lock holders can silently block dispatch cycles for the duration of `PULSE_LOCK_MAX_AGE_S` (default 1800s = 30 min) until the stale-lock reclaim kicks in. Silent exits make operator triage take 10× longer.
 
 ## Config drops index
 

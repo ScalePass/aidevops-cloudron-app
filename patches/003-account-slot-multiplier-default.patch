@@ -8,20 +8,29 @@
  #######################################
  pulse_apply_provider_load_capacity_cap() {
  	local raw_max_workers="$1"
-@@ -274,7 +275,15 @@
+@@ -274,12 +275,22 @@
  	[[ "$provider_5xx" =~ ^[0-9]+$ ]] || provider_5xx=0
  	[[ "$progress_heartbeats" =~ ^[0-9]+$ ]] || progress_heartbeats=0
  
--	local account_multiplier="${PULSE_PROVIDER_ACCOUNT_SLOT_MULTIPLIER:-2}"
-+	# ScalePass patch 003: upstream default of 2 caps effective_slots at 2
-+	# with a 1-account OAuth pool, throttling dispatch_max to iter≤2 even
-+	# when the worker pool has spare capacity. Raised to 4 as a conservative
-+	# envelope test (2× upstream) to measure Anthropic rate-limit behaviour
-+	# on Claude Max OAuth. Env override PULSE_PROVIDER_ACCOUNT_SLOT_MULTIPLIER
-+	# still wins when set. Watch pulse.log for the rate_limit halving rule
-+	# (final_max = (final_max+1)/2 in pulse-capacity.sh) — mild oscillation
++	# ScalePass patch 003 (2026-05-18, rebased 2026-05-20): upstream default of 2
++	# caps effective_slots at 2 with a 1-account OAuth pool, throttling
++	# dispatch_max to iter≤2 even when the worker pool has spare capacity.
++	# Raised to 4 as a conservative envelope test (2× upstream) to measure
++	# Anthropic rate-limit behaviour on Claude Max OAuth. Env override
++	# PULSE_PROVIDER_ACCOUNT_SLOT_MULTIPLIER still wins when set; config-file
++	# value (orchestration.provider_account_slot_multiplier) wins next.
++	# Only the literal-2 fallback is bumped to 4. Watch pulse.log for the
++	# rate_limit halving rule (final_max = (final_max+1)/2) — mild oscillation
 +	# is expected; severe oscillation means roll back to :-2 or :-3.
-+	local account_multiplier="${PULSE_PROVIDER_ACCOUNT_SLOT_MULTIPLIER:-4}"
- 	[[ "$account_multiplier" =~ ^[0-9]+$ ]] || account_multiplier=2
+ 	local account_multiplier="${PULSE_PROVIDER_ACCOUNT_SLOT_MULTIPLIER:-}"
+ 	if [[ -z "$account_multiplier" ]] && declare -F config_get >/dev/null 2>&1; then
+-		account_multiplier=$(config_get "orchestration.provider_account_slot_multiplier" "2") || account_multiplier="2"
++		account_multiplier=$(config_get "orchestration.provider_account_slot_multiplier" "4") || account_multiplier="4"
+ 	fi
+-	[[ -n "$account_multiplier" ]] || account_multiplier=2
+-	[[ "$account_multiplier" =~ ^[0-9]+$ ]] || account_multiplier=2
++	[[ -n "$account_multiplier" ]] || account_multiplier=4
++	[[ "$account_multiplier" =~ ^[0-9]+$ ]] || account_multiplier=4
  	((account_multiplier < 1)) && account_multiplier=1
  	local account_cap=-1
+ 	if ((account_available >= 0)); then
