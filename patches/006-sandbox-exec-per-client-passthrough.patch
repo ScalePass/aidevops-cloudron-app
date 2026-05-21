@@ -1,0 +1,34 @@
+--- a/.agents/scripts/sandbox-exec-helper.sh
++++ b/.agents/scripts/sandbox-exec-helper.sh
+@@ -47,8 +47,29 @@
+ readonly SANDBOX_MAX_OUTPUT_BYTES=10485760 # 10MB per stream
+ readonly SECRET_IO_GUARD_DEFAULT="true"
+ 
+-# Minimal environment passthrough — only what's needed for basic operation
+-readonly DEFAULT_PASSTHROUGH="PATH HOME USER LANG TERM SHELL"
++# [ScalePass patch 006 — sandbox-exec per-client passthrough extension]
++# Original line: readonly DEFAULT_PASSTHROUGH="PATH HOME USER LANG TERM SHELL"
++#
++# Per-client extension of the env-var allowlist via a file at
++# ${HOME}/.config/aidevops/sandbox-passthrough.txt — one env-var name per line,
++# # comments and blank lines ignored. Lets clients expose vars like
++# <CLIENT>_GITHUB_PAT or <CLIENT>_NEON_DSN to sandboxed tool calls without
++# editing this framework script per client (the original would have required
++# either upstream PRs or out-of-tree patches for every new env var).
++#
++# Pairs with ${HOME}/.config/aidevops/credentials.sh (sourced by
++# pulse-wrapper.sh:394, GH#17546) to form the canonical two-gate per-client
++# env-var propagation. See ScalePass docs/10-build-new-client-runbook.md
++# § "Per-client env-var propagation (two gates)" for the full pattern.
++_sp_extra_passthrough=""
++if [[ -f "${HOME:-/nonexistent}/.config/aidevops/sandbox-passthrough.txt" ]]; then
++	_sp_extra_passthrough=$(
++		grep -vE '^[[:space:]]*(#|$)' "${HOME}/.config/aidevops/sandbox-passthrough.txt" 2>/dev/null \
++			| tr '\n' ' ' || true
++	)
++fi
++readonly DEFAULT_PASSTHROUGH="PATH HOME USER LANG TERM SHELL ${_sp_extra_passthrough}"
++unset _sp_extra_passthrough
+ 
+ # Network tier helper (t1412.3)
+ readonly NET_TIER_HELPER="${SCRIPT_DIR}/network-tier-helper.sh"

@@ -12,6 +12,7 @@ patches/
 ├── 003-account-slot-multiplier-default.patch
 ├── 004-opus-concurrency-cap-pgrep-dedup.patch
 ├── 005-pulse-wrapper-zombie-detection-and-exit-logging.patch
+├── 006-sandbox-exec-per-client-passthrough.patch
 └── configs/
     └── model-routing-table.json            per-client config drop (NOT a patch — full-file)
 ```
@@ -127,6 +128,41 @@ Two related operability defects observed during the 2026-05-19 kidzcity mini-str
 **Upstream merge candidate:** YES — both fixes are generic operability improvements that benefit any deployment. Zombie PIDs are a defensive correctness issue (kill -0 isn't sufficient on its own); silent exits are an observability deficit. Worth submitting upstream.
 
 **Risk if reverted:** zombie lock holders can silently block dispatch cycles for the duration of `PULSE_LOCK_MAX_AGE_S` (default 1800s = 30 min) until the stale-lock reclaim kicks in. Silent exits make operator triage take 10× longer.
+
+### 006 — `sandbox-exec-helper.sh` per-client env-var passthrough extension
+
+**Why this exists:**
+
+The framework's `sandbox-exec-helper.sh:51` declares `DEFAULT_PASSTHROUGH="PATH HOME USER LANG TERM SHELL"` — a minimal allowlist that strips every other env var from sandboxed tool calls. This is correct security default behaviour. But it means **per-client env vars** (e.g., `KIDZCITY_GITHUB_PAT` for cross-org repo access, `KIDZCITY_NEON_DSN` for the client's DB) **never reach the worker's `gh`/`git`/`python` calls** even when set via `cloudron env set` and even after `~/.config/aidevops/credentials.sh` has been sourced into the pulse-wrapper's own env.
+
+Discovered during the first real kidzcity mission (2026-05-21): the worker repeatedly returned `KIDZCITY_GITHUB_PAT not set` and `gh api repos/jlbryan/ebay → 404` despite the env var being present in the Cloudron app and accessible via `cloudron exec`. The runtime fix was a hardcoded edit to `DEFAULT_PASSTHROUGH` extending it with `GH_TOKEN GITHUB_TOKEN KIDZCITY_GITHUB_PAT KIDZCITY_NEON_DSN`. This patch generalises that fix so future clients don't have to repeat it.
+
+**What the patch does:**
+
+Replaces the single-line `readonly DEFAULT_PASSTHROUGH=…` with a block that reads `${HOME}/.config/aidevops/sandbox-passthrough.txt` (if present) and appends its contents (one env-var name per line; `#` comments and blank lines ignored) to the base allowlist. Per-client extensions are then a config file, not a script patch.
+
+**Target file:** `.agents/scripts/sandbox-exec-helper.sh` (deployed at `/app/data/.aidevops/agents/scripts/sandbox-exec-helper.sh`).
+
+**Insertion point:** replaces line 51 (the original `readonly DEFAULT_PASSTHROUGH=…` declaration).
+
+**Pairs with:** `${HOME}/.config/aidevops/credentials.sh` (sourced by pulse-wrapper.sh:394, GH#17546). The two together form the canonical two-gate per-client env-var propagation pattern. See `docs/10-build-new-client-runbook.md` § "Per-client env-var propagation (two gates)".
+
+**File format (`sandbox-passthrough.txt`):**
+
+```
+# Per-client env-var allowlist extension. One name per line.
+# Comments and blank lines ignored.
+GH_TOKEN
+GITHUB_TOKEN
+KIDZCITY_GITHUB_PAT
+KIDZCITY_NEON_DSN
+```
+
+**Operator-managed:** mode 0600, owned by `cloudron:cloudron`. Created at install time by the bootstrap script (registry-driven) and editable by the operator afterwards. **Never** commit this file to the client repo or to scalepass-work — env var names are not secrets, but the convention is that per-client config lives only in the worker app's data volume.
+
+**Upstream merge candidate:** YES — the "extend allowlist via config file" pattern is generally useful and not ScalePass-specific. Submit as upstream PR (see `../UPSTREAM.md`).
+
+**Risk if reverted:** per-client env vars are stripped from sandboxed tool calls. Workers cannot use cross-org GitHub PATs, per-client DB DSNs, or any other client-specific credential beyond `GH_TOKEN`. The same symptom that prompted the patch in the first place.
 
 ## Config drops index
 
