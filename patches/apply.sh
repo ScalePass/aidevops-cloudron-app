@@ -46,11 +46,14 @@ applied=0
 skipped=0
 failed=0
 
-# Extract the first "+#" comment line added by this patch — used as the
+# Extract the first comment line added by this patch — used as the
 # idempotency marker. If grep finds it in the target, the patch is applied.
+# Accepts both column-zero `+#` (patches 001-006) and indented `+\t#` (patch 007+),
+# which is required for patches whose added content sits inside a function or
+# array literal.
 patch_marker() {
     local patch="$1"
-    grep -m1 -E '^\+#' "$patch" | sed 's/^+//'
+    grep -m1 -E '^\+[[:space:]]*#' "$patch" | sed -E 's/^\+[[:space:]]*//'
 }
 
 # Find the target file the patch modifies — from the first "+++ b/..." header.
