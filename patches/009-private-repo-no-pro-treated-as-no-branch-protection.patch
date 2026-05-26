@@ -1,0 +1,14 @@
+--- a/.agents/scripts/pulse-merge-process.sh
++++ b/.agents/scripts/pulse-merge-process.sh
+@@ -1144,7 +1144,10 @@
+ 	if [[ $_rc_exit -ne 0 ]]; then
+ 		# HTTP 404 = the default branch has no classic protection rules. Rulesets
+ 		# can still enforce required checks, so inspect them before allowing.
+-		if grep -qi 'HTTP 404\|Not Found' <<<"$protection_resp"; then
++		# [ScalePass patch 009 — treat HTTP 403 Pro-required as no-protection]
++		# Private repos without GitHub Pro return 403 with "Upgrade to GitHub Pro" body.
++		# Functionally equivalent to no branch protection — treat the same as 404.
++		if grep -qiE 'HTTP 404|Not Found|Upgrade to GitHub Pro' <<<"$protection_resp"; then
+ 			local ruleset_contexts_404=""
+ 			ruleset_contexts_404=$(_required_contexts_from_rulesets_for_default_branch "$repo_slug" "$default_branch") || return 1
+ 			if [[ -n "$ruleset_contexts_404" ]]; then

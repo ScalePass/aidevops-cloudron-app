@@ -1,0 +1,29 @@
+--- a/.agents/scripts/pulse-merge-process.sh
++++ b/.agents/scripts/pulse-merge-process.sh
+@@ -1030,10 +1030,21 @@
+ 	local default_branch="$2"
+
+ 	local rulesets_json=""
+-	rulesets_json=$(gh api "repos/${repo_slug}/rulesets" 2>/dev/null) || {
+-		echo "[pulse-merge] _required_contexts_from_rulesets_for_default_branch: rulesets list failed for ${repo_slug} — caller will fail closed (GH#23019)" >>"$LOGFILE"
+-		return 1
+-	}
++	# [ScalePass patch 010 — treat HTTP 403 "Upgrade to GitHub Pro" as no rulesets configured]
++	# Private repos without GitHub Pro return 403 from rulesets API. Functionally equivalent to no rulesets.
++	local _rs_err_tmp _rs_exit
++	_rs_err_tmp=$(mktemp) || { echo "[pulse-merge] _required_contexts_from_rulesets_for_default_branch: mktemp failed for ${repo_slug} — caller will fail closed (GH#23019)" >>"$LOGFILE"; return 1; }
++	rulesets_json=$(gh api "repos/${repo_slug}/rulesets" 2>"$_rs_err_tmp")
++	_rs_exit=$?
++	if (( _rs_exit != 0 )); then
++		if grep -qiE 'Upgrade to GitHub Pro' "$_rs_err_tmp"; then
++			rm -f "$_rs_err_tmp"
++			return 0
++		fi
++		rm -f "$_rs_err_tmp"
++		echo "[pulse-merge] _required_contexts_from_rulesets_for_default_branch: rulesets list failed for ${repo_slug} — caller will fail closed (GH#23019)" >>"$LOGFILE"
++		return 1
++	fi
++	rm -f "$_rs_err_tmp"
+ 	[[ -n "$rulesets_json" && "$rulesets_json" != "[]" && "$rulesets_json" != "null" ]] || return 0
+
+ 	local active_ids=""
