@@ -13,6 +13,15 @@ patches/
 ├── 004-opus-concurrency-cap-pgrep-dedup.patch
 ├── 005-pulse-wrapper-zombie-detection-and-exit-logging.patch
 ├── 006-sandbox-exec-per-client-passthrough.patch
+├── 007-takeover-pr-skip-review-gate.patch
+├── 008-takeover-pr-required-checks-bypass.patch
+├── 009-private-repo-no-pro-treated-as-no-branch-protection.patch
+├── 010-private-repo-no-pro-treated-as-no-rulesets.patch
+├── 011-pulse-wrapper-zombie-detection-extended.patch
+├── 012-headless-runtime-drizzle-seed-fix.patch
+├── 012-repos-registration-cross-client-pulse-gate.patch
+├── tests/
+│   └── test-012-cross-client-pulse-gate.sh     acceptance test for patch 012 (#2999)
 └── configs/
     └── model-routing-table.json            per-client config drop (NOT a patch — full-file)
 ```
@@ -22,14 +31,35 @@ patches/
 For each `.patch` file:
 
 1. **Idempotency probe:** extract the first `+#` comment line from the patch (its "marker") and grep the target file for it. If found → skip silently. If not found → forward apply.
-2. **Forward apply:** `patch -p1 --forward --batch --silent --reject-file=/dev/null < <patch>`. The `--batch` flag prevents auto-reversal (a known pitfall in `patch` when applied to already-modified files).
-3. **Post-condition check:** grep the target for the marker again. If now present → success. If absent → loud failure (upstream framework changed under us).
+2. **Path translation (F7, 2026-05-18):** rewrite `--- a/.agents/X` and `+++ b/.agents/X` headers in-flight to `--- a/agents/X` and `+++ b/agents/X` before piping to `patch -p1`. See **Path convention** below for why.
+3. **Forward apply:** `patch -p1 --forward --batch --silent --reject-file=/dev/null < <translated-stream>`. The `--batch` flag prevents auto-reversal (a known pitfall in `patch` when applied to already-modified files).
+4. **Post-condition check:** grep the target for the marker again. If now present → success. If absent → loud failure (upstream framework changed under us).
 
 For `configs/`:
 
 - All files under `configs/` are copied verbatim to `/app/data/.aidevops/agents/custom/configs/` (the framework's documented per-client override path). These are not patches; they are full-file drop-ins that the framework reads in preference to its built-in defaults.
 
 `apply.sh` is invoked from `start.sh` Phase 7b (once at container start) and from a `/etc/cron.d/scalepass-patches-reapply` cron entry installed by start.sh Phase 7c (every 5 minutes, to handle in-container framework updates).
+
+## Path convention (read this before writing a new patch)
+
+Patches in this directory use the **upstream-repo source layout** (`.agents/scripts/X`) in their unified-diff headers:
+
+```diff
+--- a/.agents/scripts/pulse-wrapper.sh
++++ b/.agents/scripts/pulse-wrapper.sh
+```
+
+The aidevops framework is deployed under `/app/data/.aidevops/agents/` (no leading dot) — the layout drops `.agents/` to `agents/`. Pre-F7 (`apply.sh` before 2026-05-18) this caused both the file-existence probe and `patch -p1` to resolve to `/app/data/.aidevops/.agents/X`, which never exists, and the script silently failed every cron run. The effects attributed to patches 001/003 were actually being delivered by Cloudron app env vars masking the failure (see GH#3002).
+
+The fix lives in `apply.sh`:
+
+- `patch_target_file()` rewrites `.agents/X` → `agents/X` for the existence probe.
+- `_translated_patch_stream()` rewrites both `--- a/.agents/` and `+++ b/.agents/` for the `patch -p1` invocation.
+
+**Authoring rule:** keep using `.agents/scripts/X` in new patch headers — that matches the upstream-repo layout and lets `ci/verify-upstream-compat.sh` (and any local `cd ~/Git/aidevops && patch -p1 < …` rebase work) operate against upstream HEAD without further translation. `apply.sh` handles the deployed-layout translation transparently.
+
+**Do not** author patches against bare `agents/X` headers — `apply.sh` will still apply them (the translation is a no-op on already-stripped paths), but you lose upstream-rebase compatibility and the patch will no longer cleanly apply against `~/Git/aidevops` for hand-review.
 
 ## Convention for new patches
 
@@ -38,6 +68,8 @@ Every patch MUST start its first added line with a `# [ScalePass patch NNN — s
 The convention also documents intent in-tree — anyone reading the patched file sees exactly which ScalePass patch added each block.
 
 Naming: `NNN-<short-description>.patch` with zero-padded sequence number. Order of application is alphabetic, so dependencies between patches should be reflected in the sequence numbers.
+
+Header paths: use `--- a/.agents/X` / `+++ b/.agents/X` (upstream layout). See **Path convention** above.
 
 ## Patches index
 
@@ -163,6 +195,98 @@ KIDZCITY_NEON_DSN
 **Upstream merge candidate:** YES — the "extend allowlist via config file" pattern is generally useful and not ScalePass-specific. Submit as upstream PR (see `../UPSTREAM.md`).
 
 **Risk if reverted:** per-client env vars are stripped from sandboxed tool calls. Workers cannot use cross-org GitHub PATs, per-client DB DSNs, or any other client-specific credential beyond `GH_TOKEN`. The same symptom that prompted the patch in the first place.
+
+### 011 — `pulse-wrapper.sh` + `pulse-instance-lock.sh` extend zombie detection to FFJIT + preserve-PID paths
+
+**Why this exists:**
+
+Patch 005 added zombie detection to the `acquire_instance_lock` path in `main()`, but two OTHER PID-file checks had the same bug — `kill -0` / `_get_process_age` return success on zombie processes, leading to "preserve / skip" of defunct PIDs indefinitely:
+
+- **Site A** (`pulse-wrapper.sh:~231`): the FFJIT pre-flight short-circuit. Exits with `[pulse-wrapper] another instance running` when the zombie's age is under `PULSE_LOCK_MAX_AGE_S`, silently blocking all cron-fired pulses.
+- **Site B** (`pulse-instance-lock.sh:~448`): the "preserving active pulse PID for transcript-driven decisions" block. Compounds via the `Pulse already running (PID …, Xs elapsed). Skipping.` path.
+
+Discovered 2026-05-27 during a kidzcity-aidevops mission dispatch test (ScalePass/kidzcity-work#28). Two distinct zombie PIDs (1384320 and 1369333) held two separate locks for 41+ minutes despite patch 005 being installed, blocking all pulse cycles.
+
+**What the patch does:**
+
+At both sites, inserts a `/proc/$PID/status` `State:Z` check before the existing `kill -0` / age logic. If the lock holder is a zombie, falls through to the reclaim path (Site A) or writes an IDLE sentinel and proceeds (Site B), with diagnostic log messages citing `ScalePass patch 011`.
+
+**Target files:**
+- `.agents/scripts/pulse-wrapper.sh` (deployed at `/app/data/.aidevops/agents/scripts/pulse-wrapper.sh`) — primary target, idempotency marker lives here
+- `.agents/scripts/pulse-instance-lock.sh` (deployed at `/app/data/.aidevops/agents/scripts/pulse-instance-lock.sh`) — secondary target in the same multi-file patch
+
+**Note on multi-file patch:** `apply.sh`'s idempotency probe checks only the first file's marker. `patch -p1` applies both file hunks atomically. Since both target files are updated together by `aidevops update`, partial-revert is not a concern in practice.
+
+**Insertion points:**
+- Site A: inside the existing `if kill -0 "$_pw_ffjit_pid"` block (line ~231), wrapping the age check in a zombie-state `if/else`.
+- Site B: after the stale-process kill block's `fi` (line ~447), before the underfill logic.
+
+**Upstream merge candidate:** YES — same rationale as patch 005. The zombie-detection idiom is a defensive correctness fix for any Linux container deployment where the init process (PID 1) doesn't reap zombies promptly (Cloudron without tini, Docker without `--init`).
+
+**Risk if reverted:** zombie lock holders at either site can silently block pulse dispatch cycles for `PULSE_LOCK_MAX_AGE_S` (default 30 min) or indefinitely (Site B, where there is no age ceiling). Identical to the pre-005 risk surface but at two additional code paths.
+
+**History:** initially deployed as an emergency Python script (`apply-patch-011.py`) directly into running containers on 2026-05-27. Converted to unified-diff format for `apply.sh` integration by GH#2996.
+
+### 012-headless-runtime — `headless-runtime-lib.sh::_seed_worker_db_session_context` drizzle seed fix
+
+**Why this exists:**
+
+Workers reuse isolated sessions by persisting their `XDG_DATA_HOME`. On retry the worker's `opencode.db` already exists, so the schema-copy guard (`if [[ ! -f "$worker_db" ]]; then ...`) was skipped. But the upstream framework's schema-only copy path (`sqlite3 .schema | sqlite3`) created tables without populating `__drizzle_migrations`. On any second run of opencode against that DB, drizzle's migrator saw the tables exist but no migration row, so it re-applied migration 1 (`CREATE TABLE project`) and crashed with `DrizzleError: table 'project' already exists`.
+
+The `aidevops update` event (2026-05-27 on kidzcity-aidevops @18:50 UTC and research-aidevops @19:23 UTC) silently reverted the emergency Python script fix (`apply-patch-012.py`), forcing the operator to re-apply manually. This unified-diff converts that Python script to a form that `apply.sh` can re-apply idempotently after every framework update.
+
+**What the patch does:**
+
+Replaces the bare `sqlite3 -cmd ".timeout 5000" ... .schema | sqlite3 ...` seed path (v2 upstream shape, post-2026-05-27 framework update) with:
+
+```bash
+if ! XDG_DATA_HOME="$isolated_dir" timeout 30 opencode --version >/dev/null 2>&1; then
+    sqlite3 "$shared_db" .schema 2>/dev/null | sqlite3 "$worker_db" >/dev/null 2>&1 || return 0
+fi
+```
+
+`opencode --version` against the isolated `XDG_DATA_HOME` triggers opencode's own drizzle migrator, which correctly populates `__drizzle_migrations`. The legacy schema-only copy is kept as a fallback for environments where `opencode` is unavailable or times out.
+
+**Target file:** `.agents/scripts/headless-runtime-lib.sh` (deployed at `/app/data/.aidevops/agents/scripts/headless-runtime-lib.sh`).
+
+**Insertion point:** function `_seed_worker_db_session_context()` (~line 1056), replacing the 3-line `if [[ ! -f "$worker_db" ]]; then ... fi` block in the upstream v2 shape.
+
+**Upstream merge candidate:** YES — the schema-only copy path has always been broken for retry-with-persisted-session scenarios. The `opencode --version` pre-warm pattern is documented (t2758) and generic to any deployment. Worth submitting upstream.
+
+**Risk if reverted:** workers that retry on a persisted session crash with `DrizzleError: table 'project' already exists` on the second `opencode run` invocation. Newly-created sessions are unaffected (the `if [[ ! -f "$worker_db" ]]` guard is true and the single-run path works).
+
+**History:** initially deployed as an emergency Python script (`apply-patch-012.py`) directly into running containers on 2026-05-27. Converted to unified-diff format for `apply.sh` integration by GH#3001. Note: the filename prefix `012-` is shared with the repos-registration patch (both were independently numbered 012); they target different files and apply in the correct alphabetical order without conflict.
+
+### 012 — `aidevops-repos-lib.sh::_compute_repo_registration_defaults` cross-client pulse:true gate
+
+**Why this exists:**
+
+The framework's repo auto-discovery walks `~/Git/` and registers every git checkout into `~/.config/aidevops/repos.json` via `register_repo()` → `_compute_repo_registration_defaults()`. The original logic defaults `pulse: true` for *any* non-local-only repo with a slug. That means a container that merely clones a cross-client work repo for read purposes — e.g. a worker on `research-aidevops` cloning `ScalePass/kidzcity-work` to read an issue body, or a worktree dispatched at `/app/data/Git/kidzcity-work` — will then have its own Pulse loop claim auto-dispatch issues from that foreign work repo. The container almost always lacks the cross-org PAT (e.g. `KIDZCITY_GITHUB_PAT`) required to action those issues, so worker dispatches stall on 404s, get killed by the watchdog, and burn the first-claim-wins race against the correct container ~50% of the time.
+
+**Incident:** `ScalePass/kidzcity-work#77` on 2026-05-27 — `research-aidevops`'s pulse claimed a kidzcity issue twice (sonnet @18:29, opus @18:55) before the operator manually scrubbed `kidzcity-work` from `research-aidevops`'s `repos.json`. Tracked by `ScalePass/scalepass-work#2999`.
+
+**What the patch does:**
+
+Inserts a new helper `_sp_pulse_allowed_for_slug` immediately before `_compute_repo_registration_defaults`, and replaces the unconditional `default_pulse=true` in the else-branch with a call to the helper. The helper returns success (allowing `pulse: true`) only when:
+
+1. The slug's repo basename is in the framework-meta allowlist: `aidevops`, `aidevops-routines`, `aidevops-cloudron-app`, `scalepass-work`.
+2. A matching `<CLIENT>_GITHUB_PAT` env var is exported, where `<CLIENT>` is the repo basename with `-work` / `-aidevops` / `-mission-control` stripped and the result upper-cased.
+
+The existing `_is_mission_control_repo_name` override branch is left intact (mission-control repos preserve `pulse: true`). All other cross-client slugs default to `pulse: false`. The local clone still exists for read purposes (issue bodies, cross-repo greps); only the auto-dispatch pulse claim is gated.
+
+**Self-correcting:** when the operator later provisions a per-client PAT in `~/.config/aidevops/credentials.sh`, the next registration cycle flips that repo's default to `pulse: true`. Already-registered repos preserve their explicit `pulse` value (`register_repo`'s update branch uses `if .pulse == null then .pulse = ... else . end`).
+
+**Target file:** `.agents/scripts/aidevops-cli/aidevops-repos-lib.sh` (deployed at `/app/data/.aidevops/agents/scripts/aidevops-cli/aidevops-repos-lib.sh`).
+
+**Insertion point:** marker comment + helper function inserted before line 128 (the function-header comment of `_compute_repo_registration_defaults`); two-line in-place replacement at the unconditional `default_pulse=true` else-branch (line 143 in upstream).
+
+**Acceptance test:** `patches/patches/tests/test-012-cross-client-pulse-gate.sh` exercises the helper and `_compute_repo_registration_defaults` against 10 inputs covering cross-client work / cross-client aidevops / framework-meta / mission-control / local-only / profile / PAT-present / PAT-mismatch cases. Runs in-process against a temp copy of the deployed library with patch 012 applied via apply.sh's path-translation; requires no network or `gh` authentication.
+
+**Pairs with:** patch 006 (per-client passthrough). The two together form the canonical pattern: patch 006 exposes per-client env vars to sandboxed tool calls; patch 012 uses the *presence* of those vars as the gate for `pulse: true`. An operator who has provisioned a `<CLIENT>_GITHUB_PAT` in `credentials.sh` and exposed it via `sandbox-passthrough.txt` is implicitly opting in to claiming that client's auto-dispatch issues from this container.
+
+**Upstream merge candidate:** YES — the cross-client-leak surface is generic to any multi-client headless deployment, not ScalePass-specific. Worth submitting upstream.
+
+**Risk if reverted:** any container that ever clones a cross-client work repo (deliberately or as a worker side-effect) will pulse-claim that repo's auto-dispatch issues, burning workers on 404s and silently halving effective dispatch throughput per the first-claim-wins race. Identical pre-patch behaviour to the 2026-05-27 incident on `research-aidevops`.
 
 ## Config drops index
 

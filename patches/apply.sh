@@ -45,6 +45,7 @@ cd "$TARGET_DIR"
 applied=0
 skipped=0
 failed=0
+seen=0
 
 # Extract the first comment line added by this patch — used as the
 # idempotency marker. If grep finds it in the target, the patch is applied.
@@ -90,6 +91,7 @@ _translated_patch_stream() {
 
 for patch in "$PATCHES_DIR"/*.patch; do
     [[ -f "$patch" ]] || continue
+    seen=$((seen + 1))
     name=$(basename "$patch")
 
     marker=$(patch_marker "$patch")
@@ -134,8 +136,18 @@ if [[ -d "$PATCHES_DIR/configs" ]]; then
     cp -a "$PATCHES_DIR/configs/." "$TARGET_DIR/agents/custom/configs/"
 fi
 
+# Loud warning when no patches were seen at all. This is almost always a
+# packaging bug (the Docker image was built before new patches landed in the
+# repo) rather than a runtime problem, but it manifests as the same operator
+# symptom — patches appearing to "revert" after auto-update — that GH#3002
+# initially attributed to the path-mismatch bug. Surfacing it explicitly tells
+# the operator which root cause they're looking at.
+if [[ $seen -eq 0 ]]; then
+    echo "$LOG_PREFIX WARN: no *.patch files found in $PATCHES_DIR — image rebuild required if new patches exist in the source repo" >&2
+fi
+
 if [[ $applied -gt 0 || $failed -gt 0 ]]; then
-    echo "$LOG_PREFIX summary: applied=$applied skipped=$skipped failed=$failed"
+    echo "$LOG_PREFIX summary: seen=$seen applied=$applied skipped=$skipped failed=$failed"
 fi
 
 [[ $failed -eq 0 ]]

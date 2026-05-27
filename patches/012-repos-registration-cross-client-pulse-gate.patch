@@ -1,0 +1,72 @@
+--- a/.agents/scripts/aidevops-cli/aidevops-repos-lib.sh
++++ b/.agents/scripts/aidevops-cli/aidevops-repos-lib.sh
+@@ -125,6 +125,52 @@
+ 	return 0
+ }
+ 
++# [ScalePass patch 012 — cross-client pulse:true gate]
++#
++# Why this exists:
++#
++# The framework's repo auto-discovery walks ~/Git/ and registers every git
++# checkout into ${HOME}/.config/aidevops/repos.json via register_repo() ->
++# _compute_repo_registration_defaults(). The original logic defaults
++# pulse:true for any non-local-only repo with a slug. That means a
++# container that merely clones a cross-client work repo for read purposes
++# (e.g. a worker on research-aidevops cloning ScalePass/kidzcity-work to
++# read an issue body, or a worktree dispatched at /app/data/Git/kidzcity-work)
++# will then have its own Pulse loop claim auto-dispatch issues from that
++# foreign work repo. The container almost always lacks the cross-org PAT
++# (e.g. KIDZCITY_GITHUB_PAT) required to action those issues, so worker
++# dispatches stall on 404s, get killed by the watchdog, and burn the
++# first-claim-wins race against the correct container ~50% of the time.
++#
++# Incident: ScalePass/kidzcity-work#77 on 2026-05-27. Tracked at
++# ScalePass/scalepass-work#2999.
++#
++# Gate: default_pulse=true is allowed for non-local-only repos only when
++# one of (a) framework-meta allowlist, (b) mission-control repo name, or
++# (c) a matching <CLIENT>_GITHUB_PAT env var is exported, where <CLIENT>
++# is derived from the repo basename by stripping -work / -aidevops /
++# -mission-control suffix and upper-casing. Everything else defaults to
++# pulse:false. Self-corrects when the operator later provisions a PAT.
++_sp_pulse_allowed_for_slug() {
++	local _sp_slug="$1"
++	[[ "$_sp_slug" == */* ]] || return 1
++	local _sp_repo="${_sp_slug##*/}"
++	case "$_sp_repo" in
++		aidevops | aidevops-routines | aidevops-cloudron-app | scalepass-work)
++			return 0
++			;;
++	esac
++	local _sp_prefix="$_sp_repo"
++	_sp_prefix="${_sp_prefix%-mission-control}"
++	_sp_prefix="${_sp_prefix%-aidevops}"
++	_sp_prefix="${_sp_prefix%-work}"
++	[[ -n "$_sp_prefix" ]] || return 1
++	local _sp_upper
++	_sp_upper=$(printf '%s' "$_sp_prefix" | tr '[:lower:]-' '[:upper:]_')
++	local _sp_var="${_sp_upper}_GITHUB_PAT"
++	[[ -n "${!_sp_var:-}" ]]
++}
++
+ # Compute default repos.json registration values.
+ # Usage: _compute_repo_registration_defaults <path> <slug> <local_only> <maintainer>
+ # Prints eval-safe key=value lines: DEFAULT_PULSE, DEFAULT_PRIORITY
+@@ -140,7 +186,15 @@
+ 	if [[ "$is_local_only" == "true" ]]; then
+ 		default_pulse=false
+ 	else
+-		default_pulse=true
++		# [ScalePass patch 012] Cross-client pulse:true gate. The mission-control
++		# override branch below preserves prior behaviour for *-mission-control
++		# repos. Work repos like kidzcity-work require a matching CLIENT-prefix
++		# PAT (or framework-meta allowlist match) to default to pulse:true.
++		if _sp_pulse_allowed_for_slug "$slug"; then
++			default_pulse=true
++		else
++			default_pulse=false
++		fi
+ 	fi
+ 
+ 	if [[ "$slug" == */* ]]; then

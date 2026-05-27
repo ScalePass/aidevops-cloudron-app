@@ -1,0 +1,50 @@
+--- a/.agents/scripts/pulse-wrapper.sh
++++ b/.agents/scripts/pulse-wrapper.sh
+@@ -229,6 +229,17 @@
+ 	if [[ -f "$_pw_ffjit_pid_file" ]]; then
+ 		_pw_ffjit_pid=$(cat "$_pw_ffjit_pid_file" 2>/dev/null || true)
+ 		if [[ "$_pw_ffjit_pid" =~ ^[0-9]+$ ]] && kill -0 "$_pw_ffjit_pid" 2>/dev/null; then
++			# [ScalePass patch 011 — extend patch 005 zombie detection to FFJIT path]
++			# kill -0 returns success on zombies. Without an explicit State:Z check
++			# the age branch runs and logs "another instance running" indefinitely,
++			# blocking cron-fired pulses (incident 2026-05-27).
++			_pw_ffjit_state=$(awk '/^State:/{print $2; exit}' "/proc/${_pw_ffjit_pid}/status" 2>/dev/null || true)
++			if [[ "$_pw_ffjit_state" == "Z" ]]; then
++				printf '[pulse-wrapper] FFJIT check: PID %s is zombie (defunct) — falling through to main() for reclaim (ScalePass patch 011)\n' \
++					"$_pw_ffjit_pid" \
++					>>"${HOME}/.aidevops/logs/pulse-wrapper.log" 2>/dev/null || true
++				# Fall through — main() acquire_instance_lock will reclaim via patch-005 path.
++			else
+ 			# Age check mirrors main()'s is-running short-circuit (t2829).
+ 			# Use lockdir mtime as lock-acquired timestamp (mkdir is atomic).
+ 			_pw_ffjit_mtime=$(_file_mtime_epoch "$_pw_ffjit_lockdir")
+@@ -241,6 +252,7 @@
+ 				exit 0
+ 			fi
+ 			# Holder exceeds age ceiling — fall through to main() for stale-lock reclaim.
++			fi  # [ScalePass patch 011] close zombie-state else branch
+ 		fi
+ 	fi
+ 	unset _pw_ffjit_lockdir _pw_ffjit_pid_file _pw_ffjit_pid \
+
+--- a/.agents/scripts/pulse-instance-lock.sh
++++ b/.agents/scripts/pulse-instance-lock.sh
+@@ -446,6 +446,18 @@
+ 		return 0
+ 	fi
+ 
++	# [ScalePass patch 011 — extend patch 005 zombie detection to preserve-PID path]
++	# `_get_process_age` (above) works on zombies (they remain in /proc until reaped).
++	# Without an explicit State:Z check we "preserve" a defunct PID indefinitely,
++	# blocking pulse for hours (incident 2026-05-27).
++	local _pil_state
++	_pil_state=$(awk '/^State:/{print $2; exit}' "/proc/${old_pid}/status" 2>/dev/null || true)
++	if [[ "$_pil_state" == "Z" ]]; then
++		echo "[pulse-wrapper] Lock holder PID $old_pid is zombie (defunct) — writing IDLE sentinel and proceeding (ScalePass patch 011)" >>"$LOGFILE"
++		echo "IDLE:$(date -u +%Y-%m-%dT%H:%M:%SZ)-zombie-reclaim-p011" >"$PIDFILE"
++		return 0
++	fi
++
+ 	# Underfill is now intelligence-managed by the pulse session itself.
+ 	# Do not recycle running pulse processes based only on elapsed time while
+ 	# underfilled — that creates churn loops and suppresses transcript analysis.
