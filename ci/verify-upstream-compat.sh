@@ -45,18 +45,24 @@ for patch in "$PATCHES_DIR"/*.patch; do
     [[ -f "$patch" ]] || continue
     name=$(basename "$patch")
 
-    # Extract idempotency marker (first +# line)
-    marker=$(grep -m1 -E '^\+#' "$patch" | sed 's/^+//')
-    target=$(grep -m1 -E '^\+\+\+ ' "$patch" | sed 's|^+++ b/||' | sed 's|^+++ ||')
+    # Extract idempotency marker (first +# line) — optional; not every patch
+    # adds a comment line. Patches 001-006 all start with a "# ScalePass patch
+    # NNN" comment and use that as the obsolete-detection marker. Patches that
+    # add only code (007+) have no +# line; for those we skip the obsolete
+    # check and rely on the patch --dry-run alone to determine CONFLICT vs OK.
+    # `set -e` would otherwise abort the loop here on grep's no-match (exit 1).
+    marker=$(grep -m1 -E '^\+#' "$patch" 2>/dev/null | sed 's/^+//' || true)
+    target=$(grep -m1 -E '^\+\+\+ ' "$patch" 2>/dev/null | sed 's|^+++ b/||' | sed 's|^+++ ||' || true)
 
-    if [[ -z "$marker" || -z "$target" ]]; then
-        echo "$name: MALFORMED (missing marker or +++ header)"
+    if [[ -z "$target" ]]; then
+        echo "$name: MALFORMED (missing +++ header)"
         conflict=$((conflict + 1))
         continue
     fi
 
-    # Check if upstream HEAD already contains the marker → patch is obsolete
-    if grep -qF -- "$marker" "$SCRATCH/$target" 2>/dev/null; then
+    # Check if upstream HEAD already contains the marker → patch is obsolete.
+    # Only meaningful when the patch has a +# marker; otherwise skip.
+    if [[ -n "$marker" ]] && grep -qF -- "$marker" "$SCRATCH/$target" 2>/dev/null; then
         echo "$name: OBSOLETE — upstream HEAD already contains this patch's marker."
         echo "  Action: drop this patch and bump the npm pin in Dockerfile."
         obsolete=$((obsolete + 1))
