@@ -135,9 +135,16 @@ RUN printf '%s\n' \
 # ============================================
 RUN printf '%s\n' \
     '# ScalePass: supervisor-pulse scheduler — runs every 2 min (framework default).' \
+    '# AIDEVOPS_PULSE_IDLE_BACKOFF_STEP_30_S=300 caps the adaptive idle-backoff at 5 min' \
+    '# (default is 1800s/30 min) — operator preference for active development workflows.' \
+    '# See scalepass-work/docs/13-pulse-cadence-levers.md.' \
+    '# `timeout --kill-after=60s 1500s` hard-caps the supervisor-pulse session at 25 min' \
+    '# (SIGTERM) + 1 min grace (SIGKILL). Catches the --role pulse stall pattern that' \
+    '# worker-activity-watchdog.sh does NOT cover (scalepass-work#3007). Without this the' \
+    '# whole dispatch path stalls indefinitely behind a stuck pulse holding the flock.' \
     'SHELL=/bin/bash' \
     'PATH=/app/data/bin:/usr/local/node-22.14.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
-    '*/2 * * * * cloudron HOME=/app/data USER=cloudron AIDEVOPS_SUPERVISOR_PULSE=true AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST=anthropic,opencode AIDEVOPS_NON_INTERACTIVE=true AIDEVOPS_SKIP_PULSE_CURRENT_STATE_GUARDRAILS=1 AIDEVOPS_SKIP_CANARY_NEG_CACHE=1 SCANNER_PR_LIMIT=200 SCANNER_DAYS=2 flock -n /tmp/scalepass-pulse.lock /app/data/.aidevops/agents/scripts/pulse-wrapper.sh >> /app/data/.aidevops/logs/scheduler-pulse.log 2>&1' \
+    '*/2 * * * * cloudron HOME=/app/data USER=cloudron AIDEVOPS_SUPERVISOR_PULSE=true AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST=anthropic,opencode AIDEVOPS_NON_INTERACTIVE=true AIDEVOPS_SKIP_PULSE_CURRENT_STATE_GUARDRAILS=1 AIDEVOPS_SKIP_CANARY_NEG_CACHE=1 SCANNER_PR_LIMIT=200 SCANNER_DAYS=2 AIDEVOPS_PULSE_IDLE_BACKOFF_STEP_30_S=300 flock -n /tmp/scalepass-pulse.lock timeout --kill-after=60s 1500s /app/data/.aidevops/agents/scripts/pulse-wrapper.sh >> /app/data/.aidevops/logs/scheduler-pulse.log 2>&1' \
     > /etc/cron.d/scalepass-supervisor-pulse \
     && chmod 644 /etc/cron.d/scalepass-supervisor-pulse
 
