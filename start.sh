@@ -219,4 +219,8 @@ echo "==> Starting cron daemon (for ScalePass patch re-apply)"
 service cron start || /usr/sbin/cron
 
 echo "==> Launching AI DevOps Worker server"
-exec gosu cloudron:cloudron node /app/code/server.js
+# ScalePass: run under tini as PID 1 so reparented zombies (pulse/worker bash
+# subtrees whose intermediate parent exited) are reaped. node-as-PID-1 only waits
+# on its own children, leaving ~120 zombies/h to accumulate. tini -g forwards
+# signals to the whole process group for clean shutdown.
+exec /usr/bin/tini -g -- gosu cloudron:cloudron node /app/code/server.js

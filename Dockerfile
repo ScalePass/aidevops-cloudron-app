@@ -14,11 +14,16 @@ FROM cloudron/base:5.0.0
 # System dependencies
 # ============================================
 # `patch` added (ScalePass) — required by /app/code/patches/apply.sh at runtime.
+# `tini` added (ScalePass) — used as PID 1 init to reap reparented zombies. node
+# (server.js) as PID 1 only waits on children it spawned, not grandchildren that
+# reparent to it when an intermediate pulse/worker bash subtree exits, so zombies
+# (bash/gh/sqlite3/find) accumulated ~120/h per container. See start.sh exec line.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     patch \
     cron \
     ripgrep \
+    tini \
     && rm -rf /var/lib/apt/lists/*
 
 # ScalePass: cloudron user ships with /usr/sbin/nologin as login shell. When
