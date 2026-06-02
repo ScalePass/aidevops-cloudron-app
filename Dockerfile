@@ -18,12 +18,50 @@ FROM cloudron/base:5.0.0
 # (server.js) as PID 1 only waits on children it spawned, not grandchildren that
 # reparent to it when an intermediate pulse/worker bash subtree exits, so zombies
 # (bash/gh/sqlite3/find) accumulated ~120/h per container. See start.sh exec line.
+# Playwright Chromium runtime dependencies are baked at image-build time for
+# non-interactive visual QA because the Cloudron runtime user has no sudo.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     patch \
     cron \
     ripgrep \
     tini \
+    ca-certificates \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    libasound2t64 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libatspi2.0-0 \
+    libcairo2 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libexpat1 \
+    libfontconfig1 \
+    libgbm1 \
+    libglib2.0-0 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libx11-6 \
+    libx11-xcb1 \
+    libxcb1 \
+    libxcomposite1 \
+    libxcursor1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxi6 \
+    libxkbcommon0 \
+    libxrandr2 \
+    libxrender1 \
+    libxshmfence1 \
+    libxss1 \
+    libxtst6 \
+    wget \
+    xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # ScalePass: cloudron user ships with /usr/sbin/nologin as login shell. When
