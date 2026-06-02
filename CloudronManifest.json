@@ -2,7 +2,7 @@
   "id": "io.scalepass.aidevops.worker",
   "title": "ScalePass AI DevOps Worker",
   "author": "Leon Bryan <leon@scalepass.io> (forked from Marcus Quinn <marcus@marcusquinn.com>)",
-  "description": "ScalePass-managed AI DevOps worker node. Pulse-loop dispatch off GitHub issues into Anthropic Opus 4.7+, billed to per-client OAuth pool. Forked from marcusquinn/aidevops-cloudron-app with patches for Cloudron-specific HOME and provider-allowlist handling, plus per-client routing table. See https://github.com/ScalePass/aidevops-cloudron-app.",
+  "description": "ScalePass-managed AI DevOps worker node. Pulse-loop dispatch off GitHub issues into OpenAI GPT-5.5 primary with OpenCode fallback, billed to per-client OAuth pool. Forked from marcusquinn/aidevops-cloudron-app with patches for Cloudron-specific HOME and provider-allowlist handling, plus per-client routing table. See https://github.com/ScalePass/aidevops-cloudron-app.",
   "tagline": "Per-client autonomous code-PR worker",
   "version": "1.0.0",
   "healthCheckPath": "/health",

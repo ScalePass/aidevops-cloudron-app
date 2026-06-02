@@ -58,17 +58,15 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # ============================================
 # OpenCode CLI (from GitHub releases) + aidevops CLI (PINNED VERSION)
 # ============================================
-# ScalePass change: pinned `aidevops@3.15.38` (was unversioned upstream).
+# ScalePass change: pinned `aidevops@3.20.8` (was unversioned upstream).
 # The pinned version matches kidzcity's currently-running production framework.
 # See UPSTREAM.md for the upgrade ritual.
-# ScalePass pin: opencode v1.14.45 matches kidzcity. v1.15.1+ has incompatible
-# model-name format (bare names instead of provider/model) which breaks the
-# framework canary. v1.14.45 stays compatible with framework v3.15.38's routing.
-RUN curl -fsSL "https://github.com/anomalyco/opencode/releases/download/v1.14.45/opencode-linux-x64.tar.gz" \
+# ScalePass pin: opencode v1.15.13 matches kidzcity. v1.15.13+ is required for the TechOps GPT-5.5 / ChatGPT OAuth path; capture opencode --version at build time for reproducibility.
+RUN curl -fsSL "https://github.com/anomalyco/opencode/releases/download/v1.15.13/opencode-linux-x64.tar.gz" \
     | tar -xz -C /usr/local/bin \
     && chmod +x /usr/local/bin/opencode \
     && opencode --version \
-    && npm install -g aidevops@3.15.38
+    && npm install -g aidevops@3.20.8
 
 # ============================================
 # Writable home directories (Cloudron read-only /app/code workaround)
@@ -149,7 +147,7 @@ RUN printf '%s\n' \
     '# whole dispatch path stalls indefinitely behind a stuck pulse holding the flock.' \
     'SHELL=/bin/bash' \
     'PATH=/app/data/bin:/usr/local/node-22.14.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
-    '*/2 * * * * cloudron HOME=/app/data USER=cloudron AIDEVOPS_SUPERVISOR_PULSE=true AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST=anthropic,opencode AIDEVOPS_NON_INTERACTIVE=true AIDEVOPS_SKIP_PULSE_CURRENT_STATE_GUARDRAILS=1 AIDEVOPS_SKIP_CANARY_NEG_CACHE=1 SCANNER_PR_LIMIT=200 SCANNER_DAYS=2 AIDEVOPS_PULSE_IDLE_BACKOFF_STEP_30_S=300 flock -n /tmp/scalepass-pulse.lock timeout --kill-after=60s 1500s /app/data/.aidevops/agents/scripts/pulse-wrapper.sh >> /app/data/.aidevops/logs/scheduler-pulse.log 2>&1' \
+    '*/2 * * * * cloudron HOME=/app/data USER=cloudron AIDEVOPS_SUPERVISOR_PULSE=true AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST=openai,opencode AIDEVOPS_NON_INTERACTIVE=true AIDEVOPS_SKIP_PULSE_CURRENT_STATE_GUARDRAILS=1 AIDEVOPS_SKIP_CANARY_NEG_CACHE=1 SCANNER_PR_LIMIT=200 SCANNER_DAYS=2 AIDEVOPS_PULSE_IDLE_BACKOFF_STEP_30_S=300 flock -n /tmp/scalepass-pulse.lock timeout --kill-after=60s 1500s /app/data/.aidevops/agents/scripts/pulse-wrapper.sh >> /app/data/.aidevops/logs/scheduler-pulse.log 2>&1' \
     > /etc/cron.d/scalepass-supervisor-pulse \
     && chmod 644 /etc/cron.d/scalepass-supervisor-pulse
 
@@ -180,7 +178,7 @@ RUN printf '%s\n' \
     '# Decouples PR merge from the monolithic pulse cycle preflight stack.' \
     'SHELL=/bin/bash' \
     'PATH=/app/data/bin:/usr/local/node-22.14.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
-    '*/2 * * * * cloudron HOME=/app/data USER=cloudron AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST=anthropic,opencode AIDEVOPS_NON_INTERACTIVE=true /app/data/.aidevops/agents/scripts/pulse-merge-routine.sh >> /app/data/.aidevops/logs/pulse-merge-routine.log 2>&1' \
+    '*/2 * * * * cloudron HOME=/app/data USER=cloudron AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST=openai,opencode AIDEVOPS_NON_INTERACTIVE=true /app/data/.aidevops/agents/scripts/pulse-merge-routine.sh >> /app/data/.aidevops/logs/pulse-merge-routine.log 2>&1' \
     > /etc/cron.d/scalepass-pulse-merge-routine \
     && chmod 644 /etc/cron.d/scalepass-pulse-merge-routine
 
