@@ -384,7 +384,8 @@ async function handleDispatch(req, res) {
 
   const env = {
     ...process.env,
-    HOME: '/home/cloudron',
+    HOME: '/app/data',
+    USER: 'cloudron',
     FULL_LOOP_HEADLESS: 'true',
     AIDEVOPS_REMOTE_DISPATCH: 'true',
   };
@@ -392,8 +393,9 @@ async function handleDispatch(req, res) {
     env.ANTHROPIC_MODEL = model;
   }
 
-  // Use opencode CLI (installed globally) — spawn with array args, no shell
-  const workerProcess = spawn('opencode', ['-p', prompt, '--allowedTools', '*'], {
+  // OpenCode 1.15+ headless invocation: `opencode run --model provider/model <prompt>` (the old `-p`/`--allowedTools` form prints help and no-ops).
+  const runModel = (model && typeof model === 'string' && /^[a-zA-Z0-9./_-]+$/.test(model)) ? model : 'openai/gpt-5.5';
+  const workerProcess = spawn('opencode', ['run', '--model', runModel, prompt], {
     cwd: repoDir,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
