@@ -20,6 +20,7 @@ patches/
 ├── 011-pulse-wrapper-zombie-detection-extended.patch
 ├── 012-headless-runtime-drizzle-seed-fix.patch
 ├── 012-repos-registration-cross-client-pulse-gate.patch
+├── 013-npm-cache-gc.patch
 ├── tests/
 │   └── test-012-cross-client-pulse-gate.sh     acceptance test for patch 012 (#2999)
 └── configs/
@@ -287,6 +288,26 @@ The existing `_is_mission_control_repo_name` override branch is left intact (mis
 **Upstream merge candidate:** YES — the cross-client-leak surface is generic to any multi-client headless deployment, not ScalePass-specific. Worth submitting upstream.
 
 **Risk if reverted:** any container that ever clones a cross-client work repo (deliberately or as a worker side-effect) will pulse-claim that repo's auto-dispatch issues, burning workers on 404s and silently halving effective dispatch throughput per the first-claim-wins race. Identical pre-patch behaviour to the 2026-05-27 incident on `research-aidevops`.
+
+### 013 — `pulse-wrapper.sh` bounded npm cache GC
+
+**Why this exists:**
+
+The worker's npm cache (`${HOME}/.npm/_cacache`, HOME=/app/data) grows **unbounded**. The bulk comes from mission-time `npm install`s — opencode installing dependencies in the node repos it works on — accumulating over weeks of dispatch. Observed ~50–56 GB **per worker** across kidzcity/research/techops/hunta on 2026-07-14, pushing the Cloudron mothership disk to 84% (484 GB / 581 GB). npm has no built-in cache-size cap, and `cache-max` is a deprecated no-op in npm 7+.
+
+**What the patch does:**
+
+Adds a **wrapper-level maintenance stage** to the pulse cycle (immediately after `_pulse_check_runaway_log`, modelled on the same sentinel-gated / fail-open pattern). Each cycle it: rate-limits to once per hour via `${HOME}/.aidevops/cache/npm-cache-gc.stamp`; then `du -sm`'s the cache and runs `npm cache clean --force` **only when it exceeds 5 GB**. Event-driven (no external cron), npm-native (no `rm -rf`), size-gated (near-free when the cache is small), fail-open (`|| true` — never blocks a pulse).
+
+**Target file:** `.agents/scripts/pulse-wrapper.sh` (deployed at `/app/data/.aidevops/agents/scripts/pulse-wrapper.sh`).
+
+**Insertion point:** marker comment + guarded block inserted after the `_pulse_check_runaway_log || true` call in the pre-flight maintenance stages.
+
+**Verified:** hand-canary on kidzcity 2026-07-14 — the block executes on the next real pulse (stamp created, `bash -n` clean, pulse continues normally); the size-gate correctly skipped the clean while the cache was <5 GB.
+
+**Upstream merge candidate:** YES — unbounded npm-cache growth is generic to any long-lived headless worker that runs npm installs, not ScalePass-specific.
+
+**Risk if reverted:** npm cache resumes unbounded growth (~50 GB/worker over ~6 weeks), re-pressuring host disk.
 
 ## Config drops index
 

@@ -1,0 +1,26 @@
+--- a/.agents/scripts/pulse-wrapper.sh
++++ b/.agents/scripts/pulse-wrapper.sh
+@@ -1835,6 +1835,23 @@
+ 	# Fail-open: never blocks the pulse cycle.
+ 	_pulse_check_runaway_log || true
+ 
++	# [ScalePass patch 013 — bounded npm cache GC]
++	# Mission-time `npm install`s (opencode on node repos) grow ${HOME}/.npm/_cacache
++	# unbounded (~50G/worker over ~6wk observed). GC here as a wrapper stage:
++	# hourly-sentinel + size-gated npm-native clean. No external cron, no rm -rf.
++	# Fail-open: never blocks the pulse cycle.
++	if [ -d "${HOME}/.npm/_cacache" ]; then
++		_npmgc_stamp="${HOME}/.aidevops/cache/npm-cache-gc.stamp"
++		if [ ! -f "$_npmgc_stamp" ] || [ "$(( $(date +%s) - $(stat -c %Y "$_npmgc_stamp" 2>/dev/null || echo 0) ))" -ge 3600 ]; then
++			: > "$_npmgc_stamp" 2>/dev/null || true
++			_npmgc_mb=$(du -sm "${HOME}/.npm/_cacache" 2>/dev/null | cut -f1)
++			if [ "${_npmgc_mb:-0}" -gt 5120 ]; then
++				printf '[pulse-wrapper] npm cache %sMB>5120 — running npm cache clean --force (ScalePass patch 013)\n' "$_npmgc_mb" >>"$LOGFILE" 2>/dev/null || true
++				npm cache clean --force >/dev/null 2>&1 || true
++			fi
++		fi
++	fi
++
+ 	# t3077: LLM-driven fix-the-fixer detector. Classifies new auto-dispatch
+ 	# issues — when the work itself touches the worker dispatch system,
+ 	# applies the `fix-the-fixer` label so the dispatcher can enable extra
