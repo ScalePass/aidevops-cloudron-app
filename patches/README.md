@@ -14,7 +14,6 @@ patches/
 ├── 005-pulse-wrapper-zombie-detection-and-exit-logging.patch
 ├── 006-sandbox-exec-per-client-passthrough.patch
 ├── 007-takeover-pr-skip-review-gate.patch
-├── 008-takeover-pr-required-checks-bypass.patch
 ├── 009-private-repo-no-pro-treated-as-no-branch-protection.patch
 ├── 010-private-repo-no-pro-treated-as-no-rulesets.patch
 ├── 011-pulse-wrapper-zombie-detection-extended.patch
