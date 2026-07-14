@@ -13,7 +13,6 @@ patches/
 ├── 004-opus-concurrency-cap-pgrep-dedup.patch
 ├── 005-pulse-wrapper-zombie-detection-and-exit-logging.patch
 ├── 006-sandbox-exec-per-client-passthrough.patch
-├── 007-takeover-pr-skip-review-gate.patch
 ├── 009-private-repo-no-pro-treated-as-no-branch-protection.patch
 ├── 010-private-repo-no-pro-treated-as-no-rulesets.patch
 ├── 011-pulse-wrapper-zombie-detection-extended.patch
