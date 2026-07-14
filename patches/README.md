@@ -18,7 +18,6 @@ patches/
 ├── 009-private-repo-no-pro-treated-as-no-branch-protection.patch
 ├── 010-private-repo-no-pro-treated-as-no-rulesets.patch
 ├── 011-pulse-wrapper-zombie-detection-extended.patch
-├── 012-headless-runtime-drizzle-seed-fix.patch
 ├── 012-repos-registration-cross-client-pulse-gate.patch
 ├── 013-npm-cache-gc.patch
 ├── tests/
@@ -228,7 +227,18 @@ At both sites, inserts a `/proc/$PID/status` `State:Z` check before the existing
 
 **History:** initially deployed as an emergency Python script (`apply-patch-011.py`) directly into running containers on 2026-05-27. Converted to unified-diff format for `apply.sh` integration by GH#2996.
 
-### 012-headless-runtime — `headless-runtime-lib.sh::_seed_worker_db_session_context` drizzle seed fix
+### 012-headless-runtime — RETIRED 2026-07-14 (superseded upstream) — `headless-runtime-lib.sh` drizzle seed fix
+
+> **RETIRED 2026-07-14** (ScalePass/scalepass-work#3013). Patch file removed. The upstream framework
+> (`aidevops@3.15.38`) now fixes this bug directly and more completely inside
+> `_seed_worker_db_session_context`: the fresh-DB seed uses `sqlite3 … .backup` (a **full** DB copy that
+> carries migration state) instead of the old schema-only `.schema | sqlite3` copy, then calls
+> `_sync_worker_db_migration_ledgers` to copy the `__drizzle_migrations` (+ `data_migration`, `migration`)
+> ledger rows. `_sync_worker_db_migration_metadata` + `_archive_partial_worker_db` additionally handle the
+> pre-existing-worker-DB case our patch never covered. Our `opencode --version` workaround targeted the
+> old schema-only path, which no longer exists — hence the patch could not apply (`apply.sh` FAIL). Workers
+> were **never** at drizzle-crash risk despite the apply failure, because upstream already covers it.
+> Historical rationale retained below.
 
 **Why this exists:**
 
