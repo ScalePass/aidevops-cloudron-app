@@ -1,0 +1,6 @@
+# Preserve the exact proven TechOps runtime and replace only the audited
+# startup policy. This avoids regressing its Playwright and GPT-5.5 toolchain.
+FROM ghcr.io/scalepass/io.scalepass.aidevops.worker:d4a777400786
+
+COPY start.sh /app/code/start.sh
+RUN chmod 0755 /app/code/start.sh
