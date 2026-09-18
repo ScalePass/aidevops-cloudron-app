@@ -35,3 +35,12 @@ jobs:
           tags: |
             ghcr.io/scalepass/aidevops-cloudron-app:patch-retirement-latest
             ghcr.io/scalepass/aidevops-cloudron-app:${{ github.sha }}
+      - name: Build TechOps recovery image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.techops-recovery
+          push: true
+          tags: |
+            ghcr.io/scalepass/aidevops-cloudron-app:techops-recovery-latest
+            ghcr.io/scalepass/aidevops-cloudron-app:techops-recovery-${{ github.sha }}
