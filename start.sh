@@ -45,8 +45,15 @@ mkdir -p /app/data/.aidevops
 mkdir -p /app/data/Git
 mkdir -p /run/app
 [[ ! -L /app/data/.gitconfig ]] && touch /app/data/.gitconfig
-chown -hR cloudron:cloudron /app/data
-chown -hR cloudron:cloudron /run/app
+
+# Keep startup time proportional to the small control surface, not to the size
+# of retained repositories, caches, logs, and worktrees. A recursive chown of
+# all /app/data can exceed Cloudron's health window and trigger a restart loop.
+chown -h cloudron:cloudron \
+	/app/data /app/data/workspace /app/data/logs /app/data/aidevops \
+	/app/data/.aidevops /app/data/Git /app/data/.gitconfig /run/app
+chown -hR cloudron:cloudron \
+	/app/data/config /app/data/.ssh /app/data/.config/aidevops
 
 # ============================================
 # PHASE 3: First-Run Initialization
@@ -101,6 +108,25 @@ EOF
 	fi
 fi
 
+# The governed credentials file is the runtime source of truth. Source it
+# without echoing values so a rotated token takes effect on an ordinary boot.
+if [[ -f /app/data/.config/aidevops/credentials.sh ]]; then
+	set -a
+	# shellcheck disable=SC1091
+	source /app/data/.config/aidevops/credentials.sh
+	set +a
+fi
+
+PULSE_ENABLED=false
+if [[ "$(jq -r '.pulse.enabled // false' /app/data/config/worker.json 2>/dev/null)" == "true" ]]; then
+	PULSE_ENABLED=true
+	if [[ -f /app/data/.config/aidevops/settings.json ]] && \
+		[[ "$(jq -r '.supervisor.pulse_enabled // true' /app/data/.config/aidevops/settings.json 2>/dev/null)" != "true" ]]; then
+		PULSE_ENABLED=false
+	fi
+fi
+echo "==> Supervisor pulse enabled: ${PULSE_ENABLED}"
+
 # ============================================
 # PHASE 4: SSH Configuration
 # ============================================
@@ -131,7 +157,7 @@ gosu cloudron:cloudron git config --global init.defaultBranch main
 # ============================================
 if [[ -n "${GH_TOKEN:-}" ]]; then
 	echo "==> Configuring GitHub CLI authentication"
-	echo "$GH_TOKEN" | gosu cloudron:cloudron gh auth login --with-token 2>/dev/null || true
+	printf '%s\n' "$GH_TOKEN" | timeout 20 gosu cloudron:cloudron gh auth login --with-token 2>/dev/null || true
 fi
 
 # ============================================
@@ -160,14 +186,18 @@ export AIDEVOPS_NON_INTERACTIVE=true
 # rc=124 is timeout's signal that the inner command was killed; treat it the
 # same as any other non-zero rc — log and continue. The 5-min budget is
 # generous; observed completion when not hung is well under 60s.
-timeout 300 gosu cloudron:cloudron env HOME=/app/data USER=cloudron aidevops update \
-    || echo "==> aidevops update exited non-zero (rc=$?; continuing — cron + Phase 9 will retry framework health)"
+if [[ "$PULSE_ENABLED" == "true" ]]; then
+	timeout 300 gosu cloudron:cloudron env HOME=/app/data USER=cloudron aidevops update \
+		|| echo "==> aidevops update exited non-zero (rc=$?; continuing — cron + Phase 9 will retry framework health)"
+else
+	echo "==> Skipping aidevops update while supervisor pulse is disabled"
+fi
 
 # ============================================
 # PHASE 7b: [SCALEPASS] Apply patches against the freshly-installed framework
 # Continues past failure — the periodic cron (installed by Dockerfile) retries every 5 min.
 # ============================================
-if [[ -d /app/code/patches ]]; then
+if [[ "$PULSE_ENABLED" == "true" && -d /app/code/patches ]]; then
 	echo "==> Applying ScalePass patches"
 	gosu cloudron:cloudron /app/code/patches/apply.sh || \
 		echo "==> apply.sh exit non-zero on first boot (framework may not be initialised yet); cron will retry"
@@ -182,7 +212,7 @@ fi
 # node_modules/ is already up to date.
 # ============================================
 OPENCODE_PLUGIN_DIR=/app/data/.aidevops/agents/plugins/opencode-aidevops
-if [[ -d "$OPENCODE_PLUGIN_DIR" && -f "$OPENCODE_PLUGIN_DIR/package.json" ]]; then
+if [[ "$PULSE_ENABLED" == "true" && -d "$OPENCODE_PLUGIN_DIR" && -f "$OPENCODE_PLUGIN_DIR/package.json" ]]; then
 	if [[ ! -d "$OPENCODE_PLUGIN_DIR/node_modules" ]]; then
 		echo "==> Installing opencode-aidevops plugin npm dependencies"
 		(cd "$OPENCODE_PLUGIN_DIR" && gosu cloudron:cloudron npm install --no-audit --no-fund 2>&1) \
@@ -199,24 +229,32 @@ fi
 # cron+wrapper come up on first boot without operator interaction. Idempotent —
 # noop when pulse cron is already installed.
 # ============================================
-echo "==> Installing supervisor pulse scheduler"
-gosu cloudron:cloudron env HOME=/app/data USER=cloudron \
-    AIDEVOPS_NON_INTERACTIVE=true AIDEVOPS_SUPERVISOR_PULSE=true \
-    aidevops setup --scope pulse 2>&1 | tail -20 \
-    || echo "==> aidevops setup --scope pulse non-zero (will retry on next boot)"
+if [[ "$PULSE_ENABLED" == "true" ]]; then
+	echo "==> Installing supervisor pulse scheduler"
+	gosu cloudron:cloudron env HOME=/app/data USER=cloudron \
+		AIDEVOPS_NON_INTERACTIVE=true AIDEVOPS_SUPERVISOR_PULSE=true \
+		aidevops setup --scope pulse 2>&1 | tail -20 \
+		|| echo "==> aidevops setup --scope pulse non-zero (will retry on next boot)"
+else
+	echo "==> Supervisor pulse setup skipped by configuration"
+fi
 
 # ============================================
 # PHASE 8: Final Permissions
 # ============================================
-chown -hR cloudron:cloudron /app/data
 touch /app/data/.initialized
+chown -h cloudron:cloudron /app/data /app/data/.initialized
 
 # ============================================
 # PHASE 9: Launch cron daemon + server
 # ScalePass change: cron daemon launched in background before server.
 # ============================================
 echo "==> Starting cron daemon (for ScalePass patch re-apply)"
-service cron start || /usr/sbin/cron
+if [[ "$PULSE_ENABLED" == "true" ]]; then
+	service cron start || /usr/sbin/cron
+else
+	echo "==> Cron disabled with supervisor pulse"
+fi
 
 echo "==> Launching AI DevOps Worker server"
 # ScalePass: run under tini as PID 1 so reparented zombies (pulse/worker bash
